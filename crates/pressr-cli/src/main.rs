@@ -2,6 +2,10 @@ use clap::{Parser, ValueEnum};
 use reqwest::{Client, Method, header::{HeaderMap, HeaderName, HeaderValue}};
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
+mod data;
+
+use data::RequestData;
+
 /// pressr - A load testing tool for APIs and applications
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -109,12 +113,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Requests: {}", args.requests);
     println!("Concurrency: {}", args.concurrency);
     
-    if let Some(data_file) = args.data_file.as_ref() {
-        println!("Data file: {}", data_file.display());
-    }
+    // Load data file if specified
+    let request_data = match &args.data_file {
+        Some(path) => {
+            println!("Data file: {}", path.display());
+            match RequestData::from_json_file(path).await {
+                Ok(data) => {
+                    println!("Successfully loaded data file");
+                    
+                    // Print a summary of what was loaded
+                    if data.body.is_some() {
+                        println!("  Request body defined in data file");
+                    }
+                    
+                    if !data.headers.is_empty() {
+                        println!("  {} header(s) defined in data file", data.headers.len());
+                    }
+                    
+                    if !data.params.is_empty() {
+                        println!("  {} URL parameter(s) defined in data file", data.params.len());
+                    }
+                    
+                    if !data.path_variables.is_empty() {
+                        println!("  {} path variable(s) defined in data file", data.path_variables.len());
+                    }
+                    
+                    if !data.variables.is_empty() {
+                        println!("  {} variable set(s) defined for randomization", data.variables.len());
+                    }
+                    
+                    Some(data)
+                },
+                Err(err) => {
+                    eprintln!("Error loading data file: {}", err);
+                    None
+                }
+            }
+        },
+        None => None,
+    };
     
     if !args.headers.is_empty() {
-        println!("Headers:");
+        println!("Headers from command line:");
         for header in &args.headers {
             println!("  {}", header);
         }
@@ -128,19 +168,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .timeout(Duration::from_secs(args.timeout))
         .build()?;
     
-    // Parse headers
-    let headers = parse_headers(&args.headers);
+    // Parse command-line headers
+    let mut headers = parse_headers(&args.headers);
+    
+    // Add headers from data file if available
+    if let Some(data) = &request_data {
+        for (key, value) in &data.headers {
+            if let (Ok(key), Ok(value)) = (
+                HeaderName::from_str(key),
+                HeaderValue::from_str(value)
+            ) {
+                headers.insert(key, value);
+            }
+        }
+    }
     
     // Create the request
-    let request = client
+    let mut request_builder = client
         .request(args.method.to_reqwest_method(), &args.url)
         .headers(headers);
+    
+    // Add body from data file if available and method is appropriate
+    if let Some(data) = &request_data {
+        if matches!(args.method, HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch) {
+            if let Some(body) = &data.body {
+                request_builder = request_builder.json(body);
+            }
+        }
+    }
     
     // Send a single request as a test
     println!("\nSending a test request to {}", args.url);
     let start = std::time::Instant::now();
     
-    match request.send().await {
+    match request_builder.send().await {
         Ok(response) => {
             let duration = start.elapsed();
             let status = response.status();

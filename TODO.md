@@ -25,12 +25,13 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: `crates/pressr-cli/Cargo.toml` (add `reqwest` with features like "json", "blocking" or async runtime like `tokio`).
     *   **Completed:** Implemented asynchronous HTTP requests with error handling, header support, and detailed response reporting (status code, time, size, and body).
 
-3.  **[ ] Handle Input Data Loading:**
+3.  **[✓] Handle Input Data Loading:**
     *   **Task:** Read and parse the specified data file (start with JSON, maybe add YAML later). Define a structure to hold the data.
     *   **Tool:** Use `serde`, `serde_json`, `tokio::fs` (for async file reading).
     *   **Files:**
         *   Modify/Add: Potential new modules in `crates/pressr-cli/src/` (e.g., `data.rs`).
         *   Modify: `crates/pressr-cli/Cargo.toml` (add `serde`, `serde_json`, `tokio` with "fs" feature).
+    *   **Completed:** Implemented a flexible data module with support for loading JSON files containing request bodies, headers, URL parameters, path variables, and variable data for randomization. Added error handling with `thiserror`.
 
 4.  **[ ] Implement Concurrent Requests:**
     *   **Task:** Launch multiple requests concurrently based on user-defined level. Use data from the loaded file (randomly selected) if applicable.
