@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
+use reqwest::{Client, Method, header::{HeaderMap, HeaderName, HeaderValue}};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
 /// pressr - A load testing tool for APIs and applications
 #[derive(Parser, Debug)]
@@ -49,6 +50,20 @@ enum HttpMethod {
     Head,
 }
 
+impl HttpMethod {
+    /// Convert HttpMethod to reqwest::Method
+    fn to_reqwest_method(&self) -> Method {
+        match self {
+            HttpMethod::Get => Method::GET,
+            HttpMethod::Post => Method::POST,
+            HttpMethod::Put => Method::PUT,
+            HttpMethod::Delete => Method::DELETE,
+            HttpMethod::Patch => Method::PATCH,
+            HttpMethod::Head => Method::HEAD,
+        }
+    }
+}
+
 /// Supported output formats
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum OutputFormat {
@@ -57,10 +72,37 @@ enum OutputFormat {
     // Future formats: Csv, Html
 }
 
-fn main() {
+/// Parse headers from command line strings (format: "key:value")
+fn parse_headers(header_strings: &[String]) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    
+    for header_str in header_strings {
+        if let Some(colon_pos) = header_str.find(':') {
+            let (key, value) = header_str.split_at(colon_pos);
+            // Skip the colon
+            let value = value.trim_start_matches(':').trim();
+            
+            // Convert key to HeaderName and value to HeaderValue
+            if let (Ok(key), Ok(value)) = (
+                HeaderName::from_str(key.trim()),
+                HeaderValue::from_str(value)
+            ) {
+                headers.insert(key, value);
+            } else {
+                eprintln!("Warning: Invalid header: {}", header_str);
+            }
+        } else {
+            eprintln!("Warning: Invalid header format: {}. Expected 'key:value'", header_str);
+        }
+    }
+    
+    headers
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     
-    // Output parsed arguments for testing
     println!("Starting pressr with the following configuration:");
     println!("URL: {}", args.url);
     println!("Method: {:?}", args.method);
@@ -81,5 +123,48 @@ fn main() {
     println!("Timeout: {} seconds", args.timeout);
     println!("Output format: {:?}", args.output);
     
-    // TODO: Implement the actual load testing functionality
+    // Create a client with the specified timeout
+    let client = Client::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .build()?;
+    
+    // Parse headers
+    let headers = parse_headers(&args.headers);
+    
+    // Create the request
+    let request = client
+        .request(args.method.to_reqwest_method(), &args.url)
+        .headers(headers);
+    
+    // Send a single request as a test
+    println!("\nSending a test request to {}", args.url);
+    let start = std::time::Instant::now();
+    
+    match request.send().await {
+        Ok(response) => {
+            let duration = start.elapsed();
+            let status = response.status();
+            let body = response.text().await?;
+            
+            println!("Request completed in {} ms", duration.as_millis());
+            println!("Status: {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Unknown"));
+            println!("Response size: {} bytes", body.len());
+            
+            if body.len() <= 1000 {
+                println!("Response body:");
+                println!("{}", body);
+            } else {
+                println!("Response body: (truncated, {} bytes total)", body.len());
+                println!("{}", &body[..1000]);
+                println!("... [truncated]");
+            }
+        },
+        Err(e) => {
+            println!("Request failed: {}", e);
+        }
+    }
+    
+    // TODO: Implement the actual load testing functionality with multiple concurrent requests
+    
+    Ok(())
 }

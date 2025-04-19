@@ -17,12 +17,13 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: `crates/pressr-cli/Cargo.toml` (add `clap` dependency with "derive" feature).
     *   **Completed:** Implemented command-line arguments parsing with support for URL, HTTP method, request count, concurrency, headers, timeout, and output format.
 
-2.  **[ ] Implement Basic HTTP Request:**
+2.  **[✓] Implement Basic HTTP Request:**
     *   **Task:** Send a single HTTP request to the specified URL using the given method and headers. Print basic response info (status code).
     *   **Tool:** Use the `reqwest` crate (likely async with `tokio`).
     *   **Files:**
         *   Modify: `crates/pressr-cli/src/main.rs`
         *   Modify: `crates/pressr-cli/Cargo.toml` (add `reqwest` with features like "json", "blocking" or async runtime like `tokio`).
+    *   **Completed:** Implemented asynchronous HTTP requests with error handling, header support, and detailed response reporting (status code, time, size, and body).
 
 3.  **[ ] Handle Input Data Loading:**
     *   **Task:** Read and parse the specified data file (start with JSON, maybe add YAML later). Define a structure to hold the data.
