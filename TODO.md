@@ -71,7 +71,15 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: Root `Cargo.toml` to include the new crate in the workspace.
     *   **Completed:** Created a new `pressr-core` library crate that contains all the reusable logic: data models, error handling, HTTP request runner, and results processing. Refactored the CLI to use the core library instead of its own implementation, removing duplicate code. Updated the workspace configuration to include both crates.
 
+9.  **[ ] Advanced Reporting:**
+    *   **Task:** Enhance report generation with histograms, save reports to files (JSON, HTML), and add more detailed statistics.
+    *   **Tool:** Use `plotters` for histograms, file I/O for saving, HTML templates for web reports.
+    *   **Files:**
+        *   Modify: `crates/pressr-core/src/result.rs` (add more statistics).
+        *   Add: `crates/pressr-core/src/report.rs` (core report generation).
+        *   Modify: `crates/pressr-cli/src/report.rs` (CLI-specific reporting).
+        *   Modify: `crates/pressr-cli/src/main.rs` (add CLI flags for report options).
+
 **Future Considerations:**
 
-*   **[ ] Advanced Reporting:** Histograms, saving reports (JSON, HTML).
 *   **[ ] Alternative Frontends:** TUI, GUI (Tauri), Wasm web interface. 
