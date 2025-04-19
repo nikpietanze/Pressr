@@ -1,8 +1,10 @@
 use crate::data::RequestData;
+use crate::error::{Result, RunnerError};
 use futures::{stream, StreamExt};
 use reqwest::{Client, Method, header::HeaderMap};
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, instrument, trace, warn};
 
 /// Result of a single HTTP request
 #[derive(Debug, Clone)]
@@ -26,6 +28,7 @@ pub struct RequestResult {
 impl RequestResult {
     /// Create a new successful request result
     pub fn success(status: u16, status_text: String, duration: Duration, response_size: usize) -> Self {
+        debug!("Request succeeded with status {}", status);
         Self {
             status,
             status_text,
@@ -37,6 +40,7 @@ impl RequestResult {
     
     /// Create a new error request result
     pub fn error(error_message: String, duration: Duration) -> Self {
+        error!("Request failed: {}", error_message);
         Self {
             status: 0,
             status_text: String::new(),
@@ -87,6 +91,7 @@ pub struct LoadTestResults {
 impl LoadTestResults {
     /// Create a new empty results container
     pub fn new(url: String, method: String) -> Self {
+        debug!("Creating new LoadTestResults for {} {}", method, url);
         Self {
             url,
             method,
@@ -104,6 +109,8 @@ impl LoadTestResults {
     
     /// Add a request result and update the stats
     pub fn add_result(&mut self, result: RequestResult) {
+        trace!("Adding result with status {} to results", result.status);
+        
         // Update counters
         self.completed_requests += 1;
         
@@ -157,6 +164,8 @@ impl Runner {
         request_count: usize,
         concurrency: usize,
     ) -> Self {
+        info!("Creating runner for {} {} with {} requests ({} concurrent)",
+            method, url, request_count, concurrency);
         Self {
             client,
             url,
@@ -169,7 +178,11 @@ impl Runner {
     }
     
     /// Run the load test with the specified parameters
-    pub async fn run(&self) -> LoadTestResults {
+    #[instrument(skip(self), fields(url = %self.url, method = ?self.method))]
+    pub async fn run(&self) -> Result<LoadTestResults> {
+        info!("Starting load test with {} requests ({} concurrent)", 
+            self.request_count, self.concurrency);
+        
         // Create shared results object
         let results = Arc::new(Mutex::new(
             LoadTestResults::new(
@@ -181,6 +194,7 @@ impl Runner {
         // Create a stream of indices for the requests
         let indices = 0..self.request_count;
         
+        debug!("Setting up concurrent request stream");
         // Use buffered_unordered to limit concurrency while processing requests in order of completion
         stream::iter(indices)
             .map(|i| {
@@ -192,15 +206,27 @@ impl Runner {
                 let results = Arc::clone(&results);
                 
                 async move {
-                    let result = self.execute_request(client, url, method, headers, request_data, i).await;
-                    
-                    // Add the result to the shared results
-                    let mut results_lock = results.lock().await;
-                    results_lock.add_result(result);
-                    
-                    // Print progress
-                    if (results_lock.completed_requests % 10 == 0) || (results_lock.completed_requests == 1) {
-                        println!("Completed {}/{} requests...", results_lock.completed_requests, self.request_count);
+                    trace!("Executing request {}", i);
+                    match self.execute_request(client, url, method, headers, request_data, i).await {
+                        Ok(result) => {
+                            // Add the result to the shared results
+                            let mut results_lock = results.lock().await;
+                            results_lock.add_result(result);
+                            
+                            // Print progress
+                            if (results_lock.completed_requests % 10 == 0) || (results_lock.completed_requests == 1) {
+                                info!("Completed {}/{} requests...", results_lock.completed_requests, self.request_count);
+                            }
+                        },
+                        Err(e) => {
+                            error!("Request {} failed: {}", i, e);
+                            // Still need to update the counter even for failed requests
+                            let mut results_lock = results.lock().await;
+                            results_lock.add_result(RequestResult::error(
+                                format!("Request failed: {}", e),
+                                Duration::from_millis(0),
+                            ));
+                        }
                     }
                 }
             })
@@ -210,13 +236,19 @@ impl Runner {
         
         // Extract the results from the Arc<Mutex<>>
         let final_results = Arc::try_unwrap(results)
-            .expect("There should be no more references to results")
+            .map_err(|_| RunnerError::ConcurrencyError("Failed to unwrap results".to_string()))?
             .into_inner();
         
-        final_results
+        info!("Load test completed: {} requests, {} successful, {} failed",
+            final_results.completed_requests,
+            final_results.successful_requests,
+            final_results.failed_requests);
+        
+        Ok(final_results)
     }
     
     /// Execute a single request and return the result
+    #[instrument(skip(self, client, headers, request_data), fields(url = %url, method = ?method))]
     async fn execute_request(
         &self,
         client: Client,
@@ -224,11 +256,12 @@ impl Runner {
         method: Method,
         headers: HeaderMap,
         request_data: Option<RequestData>,
-        _request_index: usize,
-    ) -> RequestResult {
+        _request_index: usize, // Unused but kept for potential future use
+    ) -> Result<RequestResult> {
         let start = Instant::now();
         
         // Build the request
+        debug!("Building request");
         let mut request_builder = client
             .request(method, &url)
             .headers(headers);
@@ -237,34 +270,43 @@ impl Runner {
         if matches!(self.method, Method::POST | Method::PUT | Method::PATCH) {
             if let Some(data) = &request_data {
                 if let Some(body) = &data.body {
+                    debug!("Adding JSON body to request");
                     request_builder = request_builder.json(body);
                 }
             }
         }
         
         // Execute the request
+        debug!("Sending request");
         match request_builder.send().await {
             Ok(response) => {
+                debug!("Received response with status {}", response.status());
                 let status = response.status();
                 let status_text = status.canonical_reason().unwrap_or("Unknown").to_string();
                 
                 // Get the body to calculate its size
+                debug!("Reading response body");
                 match response.bytes().await {
                     Ok(bytes) => {
                         let duration = start.elapsed();
                         let size = bytes.len();
                         
-                        RequestResult::success(status.as_u16(), status_text, duration, size)
+                        trace!("Response body size: {} bytes", size);
+                        Ok(RequestResult::success(status.as_u16(), status_text, duration, size))
                     },
                     Err(e) => {
                         let duration = start.elapsed();
-                        RequestResult::error(format!("Failed to read response body: {}", e), duration)
+                        let error_msg = format!("Failed to read response body: {}", e);
+                        error!("{}", error_msg);
+                        Err(RunnerError::ResponseBodyFailed(error_msg).into())
                     }
                 }
             },
             Err(e) => {
                 let duration = start.elapsed();
-                RequestResult::error(format!("Request failed: {}", e), duration)
+                let error_msg = format!("Request failed: {}", e);
+                error!("{}", error_msg);
+                Err(RunnerError::RequestFailed(e).into())
             }
         }
     }

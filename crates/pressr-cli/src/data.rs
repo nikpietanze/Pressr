@@ -2,19 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
+use tracing::{debug, error, info, instrument};
 
-/// Error types for data operations
-#[derive(Debug, thiserror::Error)]
-pub enum DataError {
-    #[error("Failed to read file: {0}")]
-    FileRead(#[from] std::io::Error),
-    
-    #[error("Failed to parse JSON: {0}")]
-    JsonParse(#[from] serde_json::Error),
-
-    #[error("File not found at: {0}")]
-    FileNotFound(String),
-}
+use crate::error::{DataError, Result};
 
 /// Represents a data file containing request information for load testing
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -54,31 +44,50 @@ impl Default for RequestData {
 
 impl RequestData {
     /// Load request data from a JSON file
-    pub async fn from_json_file<P: AsRef<Path>>(path: P) -> Result<Self, DataError> {
+    #[instrument(skip(path), err)]
+    pub async fn from_json_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_ref = path.as_ref();
+        let path_str = path_ref.display().to_string();
+        
+        debug!("Loading data file from {}", path_str);
         
         // Check if file exists
         if !path_ref.exists() {
-            return Err(DataError::FileNotFound(path_ref.display().to_string()));
+            error!("File not found: {}", path_str);
+            return Err(DataError::FileNotFound(path_str).into());
         }
         
         // Read file content
-        let content = fs::read_to_string(path_ref).await?;
+        debug!("Reading file content");
+        let content = fs::read_to_string(path_ref).await
+            .map_err(|e| {
+                error!("Failed to read file: {}", e);
+                DataError::FileRead(e)
+            })?;
         
         // Parse JSON
-        let data = serde_json::from_str(&content)?;
+        debug!("Parsing JSON content");
+        let data = serde_json::from_str(&content)
+            .map_err(|e| {
+                error!("Failed to parse JSON: {}", e);
+                DataError::JsonParse(e)
+            })?;
         
+        info!("Successfully loaded data file");
         Ok(data)
     }
     
     /// Get a random variable set from the variables list
     /// Returns None if variables list is empty
+    #[instrument(skip(self))]
     pub fn get_random_variables(&self) -> Option<&HashMap<String, serde_json::Value>> {
         if self.variables.is_empty() {
+            debug!("Variables list is empty");
             return None;
         }
         
         let index = rand::random::<usize>() % self.variables.len();
+        debug!("Selected variable set at index {}", index);
         self.variables.get(index)
     }
 }

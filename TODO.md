@@ -54,12 +54,13 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify/Add: New module in `crates/pressr-cli/src/` (e.g., `report.rs`).
     *   **Completed:** Created a report module with support for both text and JSON report formats. Text reports include sections for summary, timing, status codes, and errors. JSON reports provide structured data for programmatic processing.
 
-7.  **[ ] Refine Error Handling & Logging:**
+7.  **[✓] Refine Error Handling & Logging:**
     *   **Task:** Implement robust error handling (`Result`, `anyhow`/`thiserror`) and logging (`tracing`).
     *   **Tool:** `anyhow`/`thiserror`, `tracing`, `tracing-subscriber`.
     *   **Files:**
         *   Modify: Throughout `crates/pressr-cli`.
         *   Modify: `crates/pressr-cli/Cargo.toml`.
+    *   **Completed:** Added centralized error handling in a dedicated `error.rs` module using `thiserror`. Implemented structured logging with `tracing` and `tracing-subscriber` throughout the application. Added verbose mode with `-v/--verbose` flag for detailed logging. Improved error reporting and context in all modules.
 
 **Future Considerations:**
 

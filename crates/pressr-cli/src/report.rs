@@ -1,8 +1,10 @@
 use crate::runner::LoadTestResults;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use tracing::{debug, info, instrument};
 
 /// Formats for reports
+#[derive(Debug)]
 pub enum ReportFormat {
     /// Plain text report
     Text,
@@ -11,15 +13,29 @@ pub enum ReportFormat {
 }
 
 /// Generate a report from the load test results
+#[instrument(skip(results))]
 pub fn generate_report(results: &LoadTestResults, format: ReportFormat) -> String {
+    info!("Generating {} report for {} test with {} requests", 
+        format_name(&format), results.method, results.completed_requests);
+    
     match format {
         ReportFormat::Text => generate_text_report(results),
         ReportFormat::Json => generate_json_report(results),
     }
 }
 
+/// Helper to get format name as string
+fn format_name(format: &ReportFormat) -> &'static str {
+    match format {
+        ReportFormat::Text => "text",
+        ReportFormat::Json => "json",
+    }
+}
+
 /// Generate a plain text report
+#[instrument(skip(results))]
 fn generate_text_report(results: &LoadTestResults) -> String {
+    debug!("Generating text report");
     let mut report = String::new();
     
     // Header
@@ -83,11 +99,14 @@ fn generate_text_report(results: &LoadTestResults) -> String {
         report.push_str("\n");
     }
     
+    debug!("Text report generated ({} chars)", report.len());
     report
 }
 
 /// Generate a JSON report
+#[instrument(skip(results))]
 fn generate_json_report(results: &LoadTestResults) -> String {
+    debug!("Generating JSON report");
     // Create a serializable version of the results
     #[derive(Serialize)]
     struct JsonReport<'a> {
@@ -135,7 +154,14 @@ fn generate_json_report(results: &LoadTestResults) -> String {
         error_counts,
     };
     
-    serde_json::to_string_pretty(&report).unwrap_or_else(|_| String::from("Error generating JSON report"))
+    let json = serde_json::to_string_pretty(&report)
+        .unwrap_or_else(|e| {
+            debug!("Error generating JSON report: {}", e);
+            String::from("Error generating JSON report")
+        });
+    
+    debug!("JSON report generated ({} chars)", json.len());
+    json
 }
 
 /// Calculate percentage

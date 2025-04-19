@@ -1,14 +1,18 @@
 use clap::{Parser, ValueEnum};
 use reqwest::{Client, Method, header::{HeaderMap, HeaderName, HeaderValue}};
 use std::{path::PathBuf, str::FromStr, time::Duration};
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::{fmt, EnvFilter};
 
 mod data;
 mod runner;
 mod report;
+mod error;
 
 use data::RequestData;
 use runner::Runner;
 use report::{ReportFormat, generate_report};
+use error::{AppError, Result};
 
 /// pressr - A load testing tool for APIs and applications
 #[derive(Parser, Debug)]
@@ -45,6 +49,10 @@ struct Args {
     /// Output format
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
     output: OutputFormat,
+    
+    /// Enable verbose logging
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 /// Supported HTTP methods
@@ -91,7 +99,7 @@ impl OutputFormat {
 }
 
 /// Parse headers from command line strings (format: "key:value")
-fn parse_headers(header_strings: &[String]) -> HeaderMap {
+fn parse_headers(header_strings: &[String]) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     
     for header_str in header_strings {
@@ -101,25 +109,56 @@ fn parse_headers(header_strings: &[String]) -> HeaderMap {
             let value = value.trim_start_matches(':').trim();
             
             // Convert key to HeaderName and value to HeaderValue
-            if let (Ok(key), Ok(value)) = (
+            match (
                 HeaderName::from_str(key.trim()),
                 HeaderValue::from_str(value)
             ) {
-                headers.insert(key, value);
-            } else {
-                eprintln!("Warning: Invalid header: {}", header_str);
+                (Ok(key), Ok(value)) => {
+                    debug!("Added header: {}: {}", key, value.to_str().unwrap_or("<binary>"));
+                    headers.insert(key, value);
+                },
+                _ => {
+                    warn!("Invalid header: {}", header_str);
+                    eprintln!("Warning: Invalid header: {}", header_str);
+                }
             }
         } else {
+            warn!("Invalid header format: {}", header_str);
             eprintln!("Warning: Invalid header format: {}. Expected 'key:value'", header_str);
         }
     }
     
-    headers
+    Ok(headers)
+}
+
+/// Initialize the logger
+fn init_logger(verbose: bool) {
+    let filter = if verbose {
+        EnvFilter::from_default_env()
+            .add_directive("pressr_cli=debug".parse().unwrap())
+            .add_directive("warn".parse().unwrap())
+    } else {
+        EnvFilter::from_default_env()
+            .add_directive("pressr_cli=info".parse().unwrap())
+            .add_directive("warn".parse().unwrap())
+    };
+    
+    fmt()
+        .with_target(false) // Don't show targets
+        .with_env_filter(filter)
+        .init();
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args = Args::parse();
+    
+    // Initialize the logger based on verbosity
+    init_logger(args.verbose);
+    
+    info!("Starting pressr with URL: {}, Method: {:?}", args.url, args.method);
+    debug!("Configuration: {} requests, {} concurrent, timeout: {}s", 
+           args.requests, args.concurrency, args.timeout);
     
     println!("Starting pressr with the following configuration:");
     println!("URL: {}", args.url);
@@ -159,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(data)
                 },
                 Err(err) => {
+                    error!("Failed to load data file: {}", err);
                     eprintln!("Error loading data file: {}", err);
                     None
                 }
@@ -178,27 +218,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Output format: {:?}", args.output);
     
     // Create a client with the specified timeout
+    debug!("Creating HTTP client with timeout: {}s", args.timeout);
     let client = Client::builder()
         .timeout(Duration::from_secs(args.timeout))
-        .build()?;
+        .build()
+        .map_err(|e| {
+            error!("Failed to create HTTP client: {}", e);
+            AppError::Request(e)
+        })?;
     
     // Parse command-line headers
-    let mut headers = parse_headers(&args.headers);
+    debug!("Parsing command-line headers");
+    let mut headers = parse_headers(&args.headers)?;
     
     // Add headers from data file if available
     if let Some(data) = &request_data {
+        debug!("Adding headers from data file");
         for (key, value) in &data.headers {
-            if let (Ok(key), Ok(value)) = (
+            match (
                 HeaderName::from_str(key),
                 HeaderValue::from_str(value)
             ) {
-                headers.insert(key, value);
+                (Ok(key), Ok(value)) => {
+                    debug!("Added header from data file: {}: {}", key, value.to_str().unwrap_or("<binary>"));
+                    headers.insert(key, value);
+                },
+                _ => {
+                    warn!("Invalid header in data file: {}: {}", key, value);
+                }
             }
         }
     }
     
     // Send a single request as a test first
     println!("\nSending a test request to {}", args.url);
+    info!("Sending test request to {}", args.url);
     
     let mut test_request_builder = client
         .request(args.method.to_reqwest_method(), &args.url)
@@ -208,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(data) = &request_data {
         if matches!(args.method, HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch) {
             if let Some(body) = &data.body {
+                debug!("Adding JSON body to test request");
                 test_request_builder = test_request_builder.json(body);
             }
         }
@@ -219,7 +274,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(response) => {
             let duration = start.elapsed();
             let status = response.status();
-            let body = response.text().await?;
+            
+            info!("Test request completed with status {} in {} ms", 
+                  status, duration.as_millis());
+            
+            let body = response.text().await
+                .map_err(|e| {
+                    error!("Failed to read test response body: {}", e);
+                    AppError::Request(e)
+                })?;
             
             println!("Test request completed in {} ms", duration.as_millis());
             println!("Status: {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Unknown"));
@@ -249,18 +312,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             
             let test_start = std::time::Instant::now();
-            let results = runner.run().await;
+            let results = runner.run().await?;
             let test_duration = test_start.elapsed();
             
             println!("\nLoad test completed in {:.2} seconds", test_duration.as_secs_f64());
+            info!("Load test completed in {:.2} seconds", test_duration.as_secs_f64());
             
             // Generate and output report
             let report = generate_report(&results, args.output.to_report_format());
             println!("\n{}", report);
         },
         Err(e) => {
+            error!("Test request failed: {}", e);
             eprintln!("Test request failed: {}", e);
             eprintln!("Cannot proceed with load test due to test request failure");
+            return Err(AppError::Request(e));
         }
     }
     
