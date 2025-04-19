@@ -3,8 +3,12 @@ use reqwest::{Client, Method, header::{HeaderMap, HeaderName, HeaderValue}};
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 mod data;
+mod runner;
+mod report;
 
 use data::RequestData;
+use runner::Runner;
+use report::{ReportFormat, generate_report};
 
 /// pressr - A load testing tool for APIs and applications
 #[derive(Parser, Debug)]
@@ -74,6 +78,16 @@ enum OutputFormat {
     Text,
     Json,
     // Future formats: Csv, Html
+}
+
+impl OutputFormat {
+    /// Convert OutputFormat to ReportFormat
+    fn to_report_format(&self) -> ReportFormat {
+        match self {
+            OutputFormat::Text => ReportFormat::Text,
+            OutputFormat::Json => ReportFormat::Json,
+        }
+    }
 }
 
 /// Parse headers from command line strings (format: "key:value")
@@ -183,31 +197,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    // Create the request
-    let mut request_builder = client
+    // Send a single request as a test first
+    println!("\nSending a test request to {}", args.url);
+    
+    let mut test_request_builder = client
         .request(args.method.to_reqwest_method(), &args.url)
-        .headers(headers);
+        .headers(headers.clone());
     
     // Add body from data file if available and method is appropriate
     if let Some(data) = &request_data {
         if matches!(args.method, HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch) {
             if let Some(body) = &data.body {
-                request_builder = request_builder.json(body);
+                test_request_builder = test_request_builder.json(body);
             }
         }
     }
     
-    // Send a single request as a test
-    println!("\nSending a test request to {}", args.url);
     let start = std::time::Instant::now();
     
-    match request_builder.send().await {
+    match test_request_builder.send().await {
         Ok(response) => {
             let duration = start.elapsed();
             let status = response.status();
             let body = response.text().await?;
             
-            println!("Request completed in {} ms", duration.as_millis());
+            println!("Test request completed in {} ms", duration.as_millis());
             println!("Status: {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Unknown"));
             println!("Response size: {} bytes", body.len());
             
@@ -219,13 +233,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", &body[..1000]);
                 println!("... [truncated]");
             }
+            
+            // Now proceed with the actual load test
+            println!("\nStarting load test with {} requests ({} concurrent)...", args.requests, args.concurrency);
+            
+            // Create and run the load test
+            let runner = Runner::new(
+                client,
+                args.url,
+                args.method.to_reqwest_method(),
+                headers,
+                request_data,
+                args.requests,
+                args.concurrency,
+            );
+            
+            let test_start = std::time::Instant::now();
+            let results = runner.run().await;
+            let test_duration = test_start.elapsed();
+            
+            println!("\nLoad test completed in {:.2} seconds", test_duration.as_secs_f64());
+            
+            // Generate and output report
+            let report = generate_report(&results, args.output.to_report_format());
+            println!("\n{}", report);
         },
         Err(e) => {
-            println!("Request failed: {}", e);
+            eprintln!("Test request failed: {}", e);
+            eprintln!("Cannot proceed with load test due to test request failure");
         }
     }
-    
-    // TODO: Implement the actual load testing functionality with multiple concurrent requests
     
     Ok(())
 }

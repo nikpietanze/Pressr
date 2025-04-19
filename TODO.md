@@ -33,23 +33,26 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: `crates/pressr-cli/Cargo.toml` (add `serde`, `serde_json`, `tokio` with "fs" feature).
     *   **Completed:** Implemented a flexible data module with support for loading JSON files containing request bodies, headers, URL parameters, path variables, and variable data for randomization. Added error handling with `thiserror`.
 
-4.  **[ ] Implement Concurrent Requests:**
+4.  **[✓] Implement Concurrent Requests:**
     *   **Task:** Launch multiple requests concurrently based on user-defined level. Use data from the loaded file (randomly selected) if applicable.
     *   **Tool:** Use `tokio` tasks (`tokio::spawn`) and potentially `futures::stream`.
     *   **Files:**
         *   Modify: `crates/pressr-cli/src/main.rs` (or a new module, e.g., `runner.rs`).
+    *   **Completed:** Created a runner module with support for concurrent request execution using `futures::stream::buffer_unordered`. Implemented request result tracking and aggregation into comprehensive load test results. Added a reporting module with both text and JSON output formats.
 
-5.  **[ ] Collect and Store Results:**
+5.  **[✓] Collect and Store Results:**
     *   **Task:** Store results for each request: status code, response time, errors. Define a result structure.
     *   **Tool:** Standard Rust data structures (`Vec<RequestResult>`).
     *   **Files:**
         *   Modify/Add: New modules in `crates/pressr-cli/src/` (e.g., `results.rs`).
+    *   **Completed:** Implemented `RequestResult` and `LoadTestResults` structs in the runner module to track individual request results and aggregate statistics such as success/failure counts, response times, and status code distribution.
 
-6.  **[ ] Generate Basic Report:**
+6.  **[✓] Generate Basic Report:**
     *   **Task:** Analyze results and print a summary report (total requests, success/error count, basic timing, errors).
     *   **Tool:** Standard Rust printing (maybe `comfy-table` later).
     *   **Files:**
         *   Modify/Add: New module in `crates/pressr-cli/src/` (e.g., `report.rs`).
+    *   **Completed:** Created a report module with support for both text and JSON report formats. Text reports include sections for summary, timing, status codes, and errors. JSON reports provide structured data for programmatic processing.
 
 7.  **[ ] Refine Error Handling & Logging:**
     *   **Task:** Implement robust error handling (`Result`, `anyhow`/`thiserror`) and logging (`tracing`).

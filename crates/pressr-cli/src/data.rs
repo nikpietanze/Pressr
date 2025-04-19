@@ -17,7 +17,7 @@ pub enum DataError {
 }
 
 /// Represents a data file containing request information for load testing
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RequestData {
     /// Optional request body to use for POST/PUT/PATCH methods
     #[serde(default)]
