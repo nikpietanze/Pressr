@@ -46,20 +46,20 @@ struct Args {
     timeout: u64,
 
     /// Output format
-    #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(short, long, value_enum, default_value_t = OutputFormat::Html)]
     output: OutputFormat,
     
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
     
-    /// Output file for the report (if not specified, prints to stdout)
+    /// Output file for the report (if not specified, auto-generates filename in reports directory)
     #[arg(short = 'f', long)]
     output_file: Option<String>,
     
-    /// Include histograms in the report
+    /// Disable histograms in the report
     #[arg(long)]
-    histograms: bool,
+    no_histograms: bool,
     
     /// Include detailed information about each request in the report
     #[arg(long)]
@@ -243,8 +243,8 @@ async fn main() -> std::result::Result<(), AppError> {
     println!("Timeout: {} seconds", args.timeout);
     println!("Output format: {:?}", args.output);
     
-    if args.histograms {
-        println!("Histograms: Enabled");
+    if args.no_histograms {
+        println!("Histograms: Disabled");
     }
     
     if args.detailed {
@@ -360,7 +360,7 @@ async fn main() -> std::result::Result<(), AppError> {
             let report_options = ReportOptions {
                 format: args.output.to_core_report_format(),
                 output_file: args.output_file.clone(),
-                include_histograms: args.histograms,
+                include_histograms: !args.no_histograms,
                 include_details: args.detailed,
             };
             
@@ -373,8 +373,16 @@ async fn main() -> std::result::Result<(), AppError> {
             if args.output_file.is_none() {
                 println!("\n{}", report);
             } else {
-                println!("\nReport written to {}", args.output_file.unwrap());
+                let output_path = if args.output_file.as_ref().unwrap().contains('/') || args.output_file.as_ref().unwrap().contains('\\') {
+                    args.output_file.as_ref().unwrap().clone()
+                } else {
+                    format!("reports/{}", args.output_file.as_ref().unwrap())
+                };
+                println!("\nReport written to {}", output_path);
             }
+            
+            // The report has been saved to a file (path is logged by the core library)
+            println!("\nReport generated successfully.");
         },
         Err(e) => {
             error!("Test request failed: {}", e);

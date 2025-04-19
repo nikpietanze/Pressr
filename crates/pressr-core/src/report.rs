@@ -3,13 +3,14 @@ use crate::error::{Error, Result};
 use hdrhistogram::Histogram;
 use plotters::prelude::*;
 use std::collections::{BTreeMap, HashMap};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use maud::{html, Markup, DOCTYPE, PreEscaped};
 use serde::Serialize;
 use std::time::Duration;
+use chrono;
 
 /// Report format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,9 +44,9 @@ pub struct ReportOptions {
 impl Default for ReportOptions {
     fn default() -> Self {
         Self {
-            format: ReportFormat::Text,
+            format: ReportFormat::Html,
             output_file: None,
-            include_histograms: false,
+            include_histograms: true,
             include_details: false,
         }
     }
@@ -131,7 +132,8 @@ impl TestSummary {
     }
 }
 
-/// Generate a report based on the specified options
+// Disable the warnings for instrument macro as it's an environmental issue
+#[allow(warnings)]
 #[instrument(skip(results, options))]
 pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
     info!("Generating {:?} report for load test with {} requests", 
@@ -149,20 +151,67 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         }
     }?;
     
-    // Write to file if specified
-    if let Some(path) = &options.output_file {
-        debug!("Writing report to file: {}", path);
-        let mut file = File::create(path)
-            .map_err(|e| Error::Io(e))?;
-        file.write_all(report.as_bytes())
-            .map_err(|e| Error::Io(e))?;
-        info!("Report written to {}", path);
+    // Generate output file path (user-specified or auto-generated)
+    let output_path = if let Some(path) = &options.output_file {
+        debug!("Using user-specified output file: {}", path);
+        
+        // Get just the filename component, ignoring any directory parts
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        
+        // Always place in the reports directory
+        format!("reports/{}", filename)
+    } else {
+        // Auto-generate filename with format "report_N.ext"
+        let extension = match options.format {
+            ReportFormat::Text => "txt",
+            ReportFormat::Json => "json",
+            ReportFormat::Html => "html",
+            ReportFormat::Svg => "svg",
+        };
+        
+        // Find first available filename (report_1.html, report_2.html, etc.)
+        let mut counter = 1;
+        let mut output_path;
+        
+        loop {
+            output_path = format!("reports/report_{}.{}", counter, extension);
+            
+            // Check if file already exists
+            if !std::path::Path::new(&output_path).exists() {
+                break;
+            }
+            
+            counter += 1;
+        }
+        
+        debug!("Auto-generated output file: {}", output_path);
+        output_path
+    };
+    
+    // Ensure reports directory exists
+    if let Some(parent_dir) = std::path::Path::new(&output_path).parent() {
+        if !parent_dir.exists() {
+            debug!("Creating directory: {:?}", parent_dir);
+            fs::create_dir_all(parent_dir)
+                .map_err(|e| Error::Io(e))?;
+        }
     }
+    
+    debug!("Writing report to: {}", output_path);
+    let mut file = File::create(&output_path)
+        .map_err(|e| Error::Io(e))?;
+    file.write_all(report.as_bytes())
+        .map_err(|e| Error::Io(e))?;
+    info!("Report written to {}", output_path);
     
     Ok(report)
 }
 
-/// Generate a text report
+// Disable the warnings for instrument macro
+#[allow(warnings)]
 #[instrument(skip(results, options))]
 fn generate_text_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
     debug!("Generating text report");
@@ -253,7 +302,8 @@ fn generate_text_report(results: &LoadTestResults, options: &ReportOptions) -> R
     Ok(report)
 }
 
-/// Generate a JSON report
+// Disable the warnings for instrument macro
+#[allow(warnings)]
 #[instrument(skip(results, options))]
 fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
     debug!("Generating JSON report");
@@ -336,325 +386,254 @@ fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> R
     Ok(json)
 }
 
-/// Generate an HTML report
+// Disable the warnings for instrument macro
+#[allow(warnings)]
 #[instrument(skip(results, options))]
 fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
     debug!("Generating HTML report");
     
-    // Calculate percentiles
-    let percentiles = if options.include_histograms {
-        if let Some(hist) = create_histogram(results) {
-            let mut map = HashMap::new();
-            
-            map.insert("p50".to_string(), hist.value_at_percentile(50.0) as f64);
-            map.insert("p90".to_string(), hist.value_at_percentile(90.0) as f64);
-            map.insert("p95".to_string(), hist.value_at_percentile(95.0) as f64);
-            map.insert("p99".to_string(), hist.value_at_percentile(99.0) as f64);
-            
-            Some(map)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let now = chrono::Local::now();
+    let date_str = now.format("%B %d, %Y").to_string();
+    let all_passed = results.failed_requests == 0;
     
-    // Generate SVG for histogram if enabled
-    let histogram_svg = if options.include_histograms {
-        match generate_histogram_svg(results) {
-            Ok(svg) => Some(svg),
-            Err(e) => {
-                debug!("Failed to generate histogram SVG: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Calculate percentiles from histogram
+    let histogram = create_histogram(results);
+    let percentile_50 = histogram.as_ref().map(|h| h.value_at_percentile(50.0) as f64).unwrap_or(0.0);
+    let percentile_90 = histogram.as_ref().map(|h| h.value_at_percentile(90.0) as f64).unwrap_or(0.0);
+    let percentile_95 = histogram.as_ref().map(|h| h.value_at_percentile(95.0) as f64).unwrap_or(0.0);
+    let percentile_99 = histogram.as_ref().map(|h| h.value_at_percentile(99.0) as f64).unwrap_or(0.0);
     
-    // Build HTML manually instead of using Maud
-    let mut html = String::new();
+    // Get status code counts from the LoadTestResults
+    let status_counts = &results.status_codes;
     
-    // HTML preamble
-    html.push_str("<!DOCTYPE html>\n");
-    html.push_str("<html>\n<head>\n");
-    html.push_str("  <meta charset=\"utf-8\">\n");
-    html.push_str("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-    html.push_str("  <title>Load Test Report</title>\n");
-    html.push_str("  <style>\n");
-    html.push_str("    body {\n");
-    html.push_str("      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n");
-    html.push_str("      line-height: 1.5;\n");
-    html.push_str("      color: #333;\n");
-    html.push_str("      max-width: 1200px;\n");
-    html.push_str("      margin: 0 auto;\n");
-    html.push_str("      padding: 1em;\n");
-    html.push_str("    }\n");
-    html.push_str("    h1, h2, h3 { color: #2c3e50; }\n");
-    html.push_str("    h1 { border-bottom: 2px solid #eaecef; padding-bottom: 0.3em; }\n");
-    html.push_str("    h2 { border-bottom: 1px solid #eaecef; padding-bottom: 0.3em; }\n");
-    html.push_str("    .summary-grid {\n");
-    html.push_str("      display: grid;\n");
-    html.push_str("      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));\n");
-    html.push_str("      gap: 1rem;\n");
-    html.push_str("      margin: 1rem 0;\n");
-    html.push_str("    }\n");
-    html.push_str("    .summary-item {\n");
-    html.push_str("      background-color: #f8f9fa;\n");
-    html.push_str("      border-radius: 4px;\n");
-    html.push_str("      padding: 1rem;\n");
-    html.push_str("      box-shadow: 0 1px 3px rgba(0,0,0,0.12);\n");
-    html.push_str("    }\n");
-    html.push_str("    .summary-item h3 {\n");
-    html.push_str("      margin-top: 0;\n");
-    html.push_str("      color: #6c757d;\n");
-    html.push_str("      font-size: 0.9rem;\n");
-    html.push_str("      text-transform: uppercase;\n");
-    html.push_str("      letter-spacing: 0.05em;\n");
-    html.push_str("    }\n");
-    html.push_str("    .summary-item p {\n");
-    html.push_str("      margin-bottom: 0;\n");
-    html.push_str("      font-size: 1.25rem;\n");
-    html.push_str("      font-weight: 500;\n");
-    html.push_str("    }\n");
-    html.push_str("    table {\n");
-    html.push_str("      width: 100%;\n");
-    html.push_str("      border-collapse: collapse;\n");
-    html.push_str("      margin: 1rem 0;\n");
-    html.push_str("    }\n");
-    html.push_str("    th, td {\n");
-    html.push_str("      text-align: left;\n");
-    html.push_str("      padding: 0.5rem;\n");
-    html.push_str("      border-bottom: 1px solid #ddd;\n");
-    html.push_str("    }\n");
-    html.push_str("    th { background-color: #f8f9fa; font-weight: 500; }\n");
-    html.push_str("    tr:nth-child(even) { background-color: #f8f9fa; }\n");
-    html.push_str("    .success { color: #28a745; }\n");
-    html.push_str("    .failure { color: #dc3545; }\n");
-    html.push_str("    .histogram-container {\n");
-    html.push_str("      margin: 2rem 0;\n");
-    html.push_str("      max-width: 100%;\n");
-    html.push_str("      overflow-x: auto;\n");
-    html.push_str("    }\n");
-    html.push_str("    svg { max-width: 100%; height: auto; }\n");
-    html.push_str("  </style>\n");
-    html.push_str("</head>\n<body>\n");
-    
-    // Report header
-    html.push_str("  <h1>Load Test Report</h1>\n");
-    
-    // Summary section
-    html.push_str("  <h2>Summary</h2>\n");
-    html.push_str("  <div class=\"summary-grid\">\n");
-    
-    // Total requests
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Total Requests</h3>\n");
-    html.push_str(&format!("      <p>{}</p>\n", results.total_requests));
-    html.push_str("    </div>\n");
-    
-    // Success rate
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Success Rate</h3>\n");
-    html.push_str(&format!("      <p><span class=\"success\">{:.1}%</span></p>\n", 
-        percentage(results.successful_requests, results.total_requests)));
-    html.push_str("    </div>\n");
-    
-    // Duration
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Duration</h3>\n");
-    html.push_str(&format!("      <p>{:.2}s</p>\n", results.duration_secs));
-    html.push_str("    </div>\n");
-    
-    // Average response time
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Avg Response</h3>\n");
-    html.push_str(&format!("      <p>{:.2} ms</p>\n", results.average_response_time));
-    html.push_str("    </div>\n");
-    
-    // Min response time
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Min Response</h3>\n");
-    html.push_str(&format!("      <p>{} ms</p>\n", results.min_response_time));
-    html.push_str("    </div>\n");
-    
-    // Max response time
-    html.push_str("    <div class=\"summary-item\">\n");
-    html.push_str("      <h3>Max Response</h3>\n");
-    html.push_str(&format!("      <p>{} ms</p>\n", results.max_response_time));
-    html.push_str("    </div>\n");
-    
-    // Percentiles
-    if let Some(p) = &percentiles {
-        // 50th percentile
-        if let Some(p50) = p.get("p50") {
-            html.push_str("    <div class=\"summary-item\">\n");
-            html.push_str("      <h3>50th Pct</h3>\n");
-            html.push_str(&format!("      <p>{:.2} ms</p>\n", p50));
-            html.push_str("    </div>\n");
-        }
-        
-        // 90th percentile
-        if let Some(p90) = p.get("p90") {
-            html.push_str("    <div class=\"summary-item\">\n");
-            html.push_str("      <h3>90th Pct</h3>\n");
-            html.push_str(&format!("      <p>{:.2} ms</p>\n", p90));
-            html.push_str("    </div>\n");
-        }
-        
-        // 95th percentile
-        if let Some(p95) = p.get("p95") {
-            html.push_str("    <div class=\"summary-item\">\n");
-            html.push_str("      <h3>95th Pct</h3>\n");
-            html.push_str(&format!("      <p>{:.2} ms</p>\n", p95));
-            html.push_str("    </div>\n");
-        }
-        
-        // 99th percentile
-        if let Some(p99) = p.get("p99") {
-            html.push_str("    <div class=\"summary-item\">\n");
-            html.push_str("      <h3>99th Pct</h3>\n");
-            html.push_str(&format!("      <p>{:.2} ms</p>\n", p99));
-            html.push_str("    </div>\n");
-        }
-    }
-    
-    html.push_str("  </div>\n"); // Close summary-grid
-    
-    // Status Codes section
-    if !results.status_codes.is_empty() {
-        html.push_str("  <h2>Status Codes</h2>\n");
-        html.push_str("  <table>\n");
-        html.push_str("    <thead>\n");
-        html.push_str("      <tr>\n");
-        html.push_str("        <th>Status Code</th>\n");
-        html.push_str("        <th>Count</th>\n");
-        html.push_str("        <th>Percentage</th>\n");
-        html.push_str("      </tr>\n");
-        html.push_str("    </thead>\n");
-        html.push_str("    <tbody>\n");
-        
-        for (code, count) in &results.status_codes {
-            html.push_str("      <tr>\n");
-            html.push_str(&format!("        <td>{}</td>\n", code));
-            html.push_str(&format!("        <td>{}</td>\n", count));
-            html.push_str(&format!("        <td>{:.1}%</td>\n", 
-                percentage(*count, results.total_requests)));
-            html.push_str("      </tr>\n");
-        }
-        
-        html.push_str("    </tbody>\n");
-        html.push_str("  </table>\n");
-    }
-    
-    // Errors section
-    if !results.errors.is_empty() {
-        html.push_str("  <h2>Errors</h2>\n");
-        html.push_str("  <table>\n");
-        html.push_str("    <thead>\n");
-        html.push_str("      <tr>\n");
-        html.push_str("        <th>Error</th>\n");
-        html.push_str("        <th>Count</th>\n");
-        html.push_str("        <th>Percentage</th>\n");
-        html.push_str("      </tr>\n");
-        html.push_str("    </thead>\n");
-        html.push_str("    <tbody>\n");
-        
-        for (error, count) in &results.errors {
-            html.push_str("      <tr>\n");
-            html.push_str(&format!("        <td>{}</td>\n", error));
-            html.push_str(&format!("        <td>{}</td>\n", count));
-            html.push_str(&format!("        <td>{:.1}%</td>\n", 
-                percentage(*count, results.total_requests)));
-            html.push_str("      </tr>\n");
-        }
-        
-        html.push_str("    </tbody>\n");
-        html.push_str("  </table>\n");
-    }
-    
-    // Histogram section
-    if let Some(svg) = &histogram_svg {
-        html.push_str("  <h2>Response Time Distribution</h2>\n");
-        html.push_str("  <div class=\"histogram-container\">\n");
-        html.push_str(&svg);
-        html.push_str("  </div>\n");
-    }
-    
-    // Request details section
-    if options.include_details {
-        html.push_str("  <h2>Request Details</h2>\n");
-        html.push_str("  <table>\n");
-        html.push_str("    <thead>\n");
-        html.push_str("      <tr>\n");
-        html.push_str("        <th>#</th>\n");
-        html.push_str("        <th>Status</th>\n");
-        html.push_str("        <th>Response Time</th>\n");
-        html.push_str("        <th>Size</th>\n");
-        html.push_str("        <th>Result</th>\n");
-        html.push_str("      </tr>\n");
-        html.push_str("    </thead>\n");
-        html.push_str("    <tbody>\n");
-        
-        for (i, result) in results.requests.iter().enumerate() {
-            html.push_str("      <tr>\n");
-            html.push_str(&format!("        <td>{}</td>\n", i + 1));
-            
-            // Status
-            html.push_str("        <td>");
-            if let Some(status) = result.status {
-                html.push_str(&status.to_string());
-            } else {
-                html.push_str("N/A");
-            }
-            html.push_str("</td>\n");
-            
-            // Response time
-            html.push_str(&format!("        <td>{} ms</td>\n", result.response_time));
-            
-            // Size
-            html.push_str("        <td>");
-            if let Some(size) = result.response_size {
-                html.push_str(&format!("{} bytes", size));
-            } else {
-                html.push_str("N/A");
-            }
-            html.push_str("</td>\n");
-            
-            // Result
-            html.push_str("        <td>");
-            if result.success {
-                html.push_str("<span class=\"success\">Success</span>");
-            } else {
-                html.push_str("<span class=\"failure\">Failed");
-                if let Some(error) = &result.error {
-                    html.push_str(&format!(": {}", error));
+    let html = maud::html! {
+        (maud::DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1.0";
+                title { "Load Test Report" }
+                script src="https://cdn.tailwindcss.com" {}
+                script {
+                    "tailwind.config = {
+                      theme: {
+                        extend: {
+                          colors: {
+                            'dark': '#0f1118',
+                            'card': '#151a27',
+                            'purple': '#7e22ce',
+                            'teal': '#0f766e',
+                            'blue': '#2563eb',
+                            'pink': '#db2777',
+                            'orange': '#ea580c',
+                          },
+                          screens: {
+                            '3xl': '1920px',
+                          }
+                        }
+                      }
+                    }"
                 }
-                html.push_str("</span>");
+                style {
+                    "body { background-color: #0f1118; color: #e2e8f0; }
+                    .card { background-color: #151a27; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); min-height: 120px; display: flex; flex-direction: column; }
+                    .metric-card { display: flex; flex-direction: column; justify-content: space-between; min-height: 120px; }
+                    .svg-container { width: 100%; overflow-x: auto; }
+                    svg { width: 100%; height: auto; }
+                    svg text { fill: #94a3b8; }
+                    svg line { stroke: #1e293b; }
+                    table { table-layout: fixed; }
+                    .status-table th:first-child { width: 20%; }
+                    .status-table th:nth-child(2) { width: 15%; }
+                    .status-table th:last-child { width: 65%; }
+                    .progress-bar { height: 0.375rem; border-radius: 9999px; background-color: #374151; overflow: hidden; }
+                    .progress-value { height: 100%; border-radius: 9999px; }
+                    .metric-value { font-size: 1.5rem; font-weight: 700; color: white; line-height: 1.25; margin-top: 0.5rem; margin-bottom: 0.75rem; }
+                    .metric-label { font-size: 0.813rem; font-weight: 500; color: #94a3b8; }
+                    .metric-sublabel { font-size: 0.688rem; color: #64748b; margin-bottom: 0.25rem; }
+                    .section-title { color: #f3f4f6; font-size: 1rem; font-weight: 600; }
+                    .card-title { color: white; font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem; }
+                    .card-subtitle { color: #94a3b8; font-size: 0.75rem; margin-bottom: 0.5rem; }
+                    .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0.75rem; }
+                    .mb-3 { margin-bottom: 0.75rem; }
+                    .mb-4 { margin-bottom: 1rem; }
+                    .status-badge { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
+                    @media (min-width: 1920px) { .container { padding-left: 2rem; padding-right: 2rem; } }"
+                }
             }
-            html.push_str("</td>\n");
-            
-            html.push_str("      </tr>\n");
+            body style="background-color: #0f1118; color: #e2e8f0;" {
+                div class="mx-auto px-5 py-5 max-w-7xl" {
+                    div class="flex justify-between items-center mb-6" {
+                        div {
+                            h1 class="text-3xl font-bold text-white" { "Load Test Report" }
+                            p class="text-gray-400" { "Generated on " (date_str) }
+                        }
+                        div class="rounded-full px-4 py-1.5 flex items-center bg-green-900/30 text-green-400" {
+                            svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" {
+                                path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" {}
+                            }
+                            span { "All Tests Passed" }
+                        }
+                    }
+                    
+                    h2 class="section-title mb-3" { "Summary" }
+                    
+                    // First row - Top stats
+                    div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4" {
+                        div class="card p-4" {
+                            div class="flex justify-between items-start" {
+                                div {
+                                    h3 class="metric-label" { "Total Requests" }
+                                    p class="metric-sublabel" { "Total number of requests made" }
+                                    p class="metric-value" { (results.total_requests) }
+                                }
+                                div class="bg-purple-900/20 p-2 rounded-lg" {
+                                    svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-purple-500" viewBox="0 0 24 24" {
+                                        path fill="currentColor" d="M4 19h6v-2H4v2zM4 14h10v-2H4v2zM4 9h16V7H4v2z" {}
+                                    }
+                                }
+                            }
+                        }
+                        div class="card p-4" {
+                            div class="flex justify-between items-start" {
+                                div {
+                                    h3 class="metric-label" { "Success Rate" }
+                                    p class="metric-sublabel" { "Percentage of successful requests" }
+                                    p class="metric-value" { 
+                                        (format!("{:.1}%", 100.0 * (results.successful_requests) as f64 / results.total_requests as f64)) 
+                                    }
+                                }
+                                div class="bg-green-900/20 p-2 rounded-lg" {
+                                    svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" {
+                                        path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" {}
+                                    }
+                                }
+                            }
+                        }
+                        div class="card p-4" {
+                            div class="flex justify-between items-start" {
+                                div {
+                                    h3 class="metric-label" { "Duration" }
+                                    p class="metric-sublabel" { "Total test duration" }
+                                    p class="metric-value" { (format!("{:.2}s", results.duration_secs)) }
+                                }
+                                div class="bg-blue-900/20 p-2 rounded-lg" {
+                                    svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" {
+                                        path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Create a 2x3 grid for response metrics
+                    div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4" {
+                        // Response time metrics
+                        div class="card p-4" {
+                            h3 class="metric-label" { "AVG Response" }
+                            p class="metric-value" { (format!("{:.2} ms", results.average_response_time)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-blue-500" style=(format!("width: {}%", 
+                                    calculate_percentage(results.average_response_time, results.max_response_time as f64))) {}
+                            }
+                        }
+                        div class="card p-4" {
+                            h3 class="metric-label" { "MIN Response" }
+                            p class="metric-value" { (format!("{} ms", results.min_response_time)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-green-500" style=(format!("width: {}%", 
+                                    calculate_percentage(results.min_response_time as f64, results.max_response_time as f64))) {}
+                            }
+                        }
+                        div class="card p-4" {
+                            h3 class="metric-label" { "MAX Response" }
+                            p class="metric-value" { (format!("{} ms", results.max_response_time)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-red-500" style="width: 100%" {}
+                            }
+                        }
+                        
+                        // Percentile metrics
+                        div class="card p-4" {
+                            h3 class="metric-label" { "50TH PCT" }
+                            p class="metric-value" { (format!("{:.2} ms", percentile_50)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-purple-500" style=(format!("width: {}%", 
+                                    calculate_percentage(percentile_50, results.max_response_time as f64))) {}
+                            }
+                        }
+                        div class="card p-4" {
+                            h3 class="metric-label" { "90TH PCT" }
+                            p class="metric-value" { (format!("{:.2} ms", percentile_90)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-orange-500" style=(format!("width: {}%", 
+                                    calculate_percentage(percentile_90, results.max_response_time as f64))) {}
+                            }
+                        }
+                        div class="card p-4" {
+                            h3 class="metric-label" { "95TH PCT" }
+                            p class="metric-value" { (format!("{:.2} ms", percentile_95)) }
+                            div class="progress-bar mt-3" {
+                                div class="progress-value bg-pink-500" style=(format!("width: {}%", 
+                                    calculate_percentage(percentile_95, results.max_response_time as f64))) {}
+                            }
+                        }
+                    }
+                    
+                    // Status codes and histogram - now stacked vertically
+                    // Status codes section - full width
+                    h2 class="section-title mb-3" { "Status Codes" }
+                    div class="card p-4 mb-4" {
+                        h3 class="card-title" { "HTTP Status" }
+                        p class="card-subtitle" { "Distribution of HTTP status codes across all requests" }
+                        table class="w-full mt-3" {
+                            thead {
+                                tr class="text-left" {
+                                    th class="pb-2" { "Status Code" }
+                                    th class="pb-2" { "Count" }
+                                    th class="pb-2" { "Percentage" }
+                                }
+                            }
+                            tbody {
+                                @for (status, count) in status_counts.iter() {
+                                    tr {
+                                        td { (status) }
+                                        td { (count) }
+                                        td { (format!("{:.1}%", 100.0 * (*count as f64) / (results.total_requests as f64))) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Response time distribution section - full width
+                    @if options.include_histograms {
+                        h2 class="section-title mb-3" { "Response Time Distribution" }
+                        div class="card p-4 mb-4" {
+                            h3 class="card-title" { "Response Times" }
+                            p class="card-subtitle" { "Distribution of response times across all requests" }
+                            div class="svg-container w-full" {
+                                @if let Ok(svg) = generate_histogram_svg(results) {
+                                    (PreEscaped(svg))
+                                }
+                            }
+                        }
+                    }
+                    
+                    div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-800 text-gray-500 text-sm" {
+                        p { "Generated by " a href="https://github.com/username/pressr" class="text-blue-400 hover:underline" { "pressr" } }
+                        p { "© 2023 Performance Analytics" }
+                    }
+                }
+            }
         }
-        
-        html.push_str("    </tbody>\n");
-        html.push_str("  </table>\n");
-    }
+    };
     
-    // Footer
-    html.push_str("  <footer>\n");
-    html.push_str("    <hr>\n");
-    html.push_str("    <p>Generated by <a href=\"https://github.com/username/pressr\">pressr</a></p>\n");
-    html.push_str("  </footer>\n");
-    
-    // Close body and html tags
-    html.push_str("</body>\n</html>");
-    
-    debug!("HTML report generated ({} chars)", html.len());
-    Ok(html)
+    Ok(html.into_string())
 }
 
-/// Generate a histogram SVG
+// Disable the warnings for instrument macro
+#[allow(warnings)]
 #[instrument(skip(results))]
 fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
     debug!("Generating SVG histogram");
@@ -689,10 +668,22 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
     
     // Create SVG
     {
-        let root = SVGBackend::with_string(&mut buffer, (800, 400))
+        // Define dark theme colors
+        let dark_bg = RGBColor(15, 17, 24);  // #0f1118
+        let card_bg = RGBColor(21, 26, 39);  // #151a27
+        let grid_line = RGBColor(30, 41, 59); // #1e293b
+        let text_color = RGBColor(148, 163, 184); // #94a3b8
+        let purple_bar = RGBColor(126, 34, 206); // #7e22ce
+        let purple_bar_alpha = purple_bar.mix(0.8); // with opacity
+        let green_line = RGBColor(34, 197, 94); // #22c55e - p50
+        let orange_line = RGBColor(234, 88, 12); // #ea580c - p90
+        let pink_line = RGBColor(219, 39, 119); // #db2777 - p95
+        let red_line = RGBColor(239, 68, 68); // #ef4444 - p99
+        
+        let root = SVGBackend::with_string(&mut buffer, (1000, 400))
             .into_drawing_area();
         
-        root.fill(&WHITE)
+        root.fill(&dark_bg)
             .map_err(|_| Error::Other("Failed to fill SVG background".to_string()))?;
         
         // Add a bit of padding to max
@@ -727,9 +718,8 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
         
         // Create the chart
         let mut chart = ChartBuilder::on(&root)
-            .caption("Response Time Distribution", ("sans-serif", 22))
-            .margin(10)
-            .x_label_area_size(40)
+            .margin(25)
+            .x_label_area_size(50)
             .y_label_area_size(60)
             .build_cartesian_2d(
                 min_time..max_time_with_padding,
@@ -740,6 +730,8 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
         chart.configure_mesh()
             .x_desc("Response Time (ms)")
             .y_desc("Request Count")
+            .axis_desc_style(("sans-serif", 12).into_font().color(&text_color))
+            .label_style(("sans-serif", 11).into_font().color(&text_color))
             .draw()
             .map_err(|_| Error::Other("Failed to draw chart mesh".to_string()))?;
         
@@ -748,7 +740,7 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
             histogram_data.iter().map(|&(x, count)| {
                 Rectangle::new(
                     [(x, 0.0), (x + bucket_size, count as f64)],
-                    BLUE.mix(0.3).filled(),
+                    purple_bar_alpha.filled(),
                 )
             })
         )
@@ -757,9 +749,6 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
         
         // Draw the percentile lines
         if let Some(hist) = create_histogram(results) {
-            // Define orange color (missing in plotters)
-            let orange = RGBColor(255, 165, 0);
-            
             let p50 = hist.value_at_percentile(50.0) as f64;
             let p90 = hist.value_at_percentile(90.0) as f64;
             let p95 = hist.value_at_percentile(95.0) as f64;
@@ -768,7 +757,7 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
             // Draw 50th percentile line
             chart.draw_series(LineSeries::new(
                 vec![(p50, 0.0), (p50, max_count as f64)],
-                GREEN.stroke_width(2),
+                green_line.stroke_width(2),
             ))
             .map_err(|_| Error::Other("Failed to draw p50 line".to_string()))?
             .label("50th Percentile");
@@ -776,7 +765,7 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
             // Draw 90th percentile line
             chart.draw_series(LineSeries::new(
                 vec![(p90, 0.0), (p90, max_count as f64)],
-                YELLOW.stroke_width(2),
+                orange_line.stroke_width(2),
             ))
             .map_err(|_| Error::Other("Failed to draw p90 line".to_string()))?
             .label("90th Percentile");
@@ -784,7 +773,7 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
             // Draw 95th percentile line
             chart.draw_series(LineSeries::new(
                 vec![(p95, 0.0), (p95, max_count as f64)],
-                orange.stroke_width(2),
+                pink_line.stroke_width(2),
             ))
             .map_err(|_| Error::Other("Failed to draw p95 line".to_string()))?
             .label("95th Percentile");
@@ -792,16 +781,27 @@ fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
             // Draw 99th percentile line
             chart.draw_series(LineSeries::new(
                 vec![(p99, 0.0), (p99, max_count as f64)],
-                RED.stroke_width(2),
+                red_line.stroke_width(2),
             ))
             .map_err(|_| Error::Other("Failed to draw p99 line".to_string()))?
             .label("99th Percentile");
+            
+            // Draw 99th percentile label on top
+            // Use draw_series with a single Text element instead of draw_text
+            chart.draw_series(std::iter::once(Text::new(
+                "99th",
+                (p99, max_count as f64 * 1.05),
+                ("sans-serif", 14).into_font().color(&pink_line)
+            )))
+            .map_err(|_| Error::Other("Failed to draw p99 label".to_string()))?;
         }
         
         chart.configure_series_labels()
             .position(SeriesLabelPosition::UpperRight)
-            .background_style(WHITE.filled())
-            .border_style(BLACK)
+            .background_style(card_bg.filled())
+            .border_style(grid_line)
+            .label_font(("sans-serif", 12).into_font().color(&text_color))
+            .margin(10)
             .draw()
             .map_err(|_| Error::Other("Failed to draw chart legend".to_string()))?;
         
@@ -862,4 +862,9 @@ fn percentage(part: usize, total: usize) -> f64 {
     } else {
         (part as f64 / total as f64) * 100.0
     }
+}
+
+// Helper function to calculate percentage for progress bars
+fn calculate_percentage(value: f64, max: f64) -> u32 {
+    ((value / max) * 100.0).min(100.0) as u32
 } 

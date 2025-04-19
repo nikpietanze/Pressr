@@ -21,4 +21,7 @@
 
 # Backup files
 *~
-*# 
+*#
+
+# Output reports
+reports/
