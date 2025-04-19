@@ -10,6 +10,8 @@ A fast and flexible load testing tool for APIs and applications.
 - Specify concurrency level and request parameters
 - Use custom data files for dynamic request content
 - Generate detailed reports on response times, status codes, and errors
+- Robust error handling with detailed context
+- Structured logging with configurable verbosity
 - Command-line interface with rich options
 
 ## Installation
@@ -38,7 +40,8 @@ pressr --url https://api.example.com/endpoint \
        --header "Content-Type: application/json" \
        --header "Authorization: Bearer token" \
        --timeout 60 \
-       --output json
+       --output json \
+       --verbose
 ```
 
 ### Command Line Options
@@ -51,6 +54,7 @@ pressr --url https://api.example.com/endpoint \
 - `-H, --header <HEADER>`: HTTP headers in "key:value" format (can be used multiple times)
 - `-t, --timeout <SECONDS>`: Request timeout in seconds [default: 30]
 - `-o, --output <FORMAT>`: Output format (text, json) [default: text]
+- `-v, --verbose`: Enable verbose logging for debugging
 - `-h, --help`: Print help
 - `-V, --version`: Print version
 
@@ -75,6 +79,8 @@ This project is licensed under [TODO: Add license].
 - 🚀 High-concurrency request engine
 - 📊 Tracks response times, errors, and full output
 - 🧠 Minimal, scriptable interface (CLI-first)
+- 🔧 Robust error handling with detailed context
+- 📝 Structured logging with configurable verbosity
 - 🧪 Perfect for CI pipelines, stress tests, and perf validation
 - 🌐 Web-ready architecture (future: browser-based load tests)
 - 🔧 Cross-compiled binaries: Windows `.exe`, macOS `.dmg`, Linux
