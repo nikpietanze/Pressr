@@ -5,7 +5,7 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 // Import pressr-core
-use pressr_core::{Result, Error, RequestData, Runner, Config};
+use pressr_core::{Result, Error, RequestData, Runner, Config, ReportFormat as CoreReportFormat, ReportOptions};
 
 mod report;
 mod error;
@@ -52,6 +52,18 @@ struct Args {
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+    
+    /// Output file for the report (if not specified, prints to stdout)
+    #[arg(short = 'f', long)]
+    output_file: Option<String>,
+    
+    /// Include histograms in the report
+    #[arg(long)]
+    histograms: bool,
+    
+    /// Include detailed information about each request in the report
+    #[arg(long)]
+    detailed: bool,
 }
 
 /// Supported HTTP methods
@@ -84,7 +96,8 @@ impl HttpMethod {
 enum OutputFormat {
     Text,
     Json,
-    // Future formats: Csv, Html
+    Html,
+    Svg,
 }
 
 impl OutputFormat {
@@ -93,6 +106,18 @@ impl OutputFormat {
         match self {
             OutputFormat::Text => ReportFormat::Text,
             OutputFormat::Json => ReportFormat::Json,
+            OutputFormat::Html => ReportFormat::Html,
+            OutputFormat::Svg => ReportFormat::Svg,
+        }
+    }
+    
+    /// Convert OutputFormat to CoreReportFormat
+    fn to_core_report_format(&self) -> CoreReportFormat {
+        match self {
+            OutputFormat::Text => CoreReportFormat::Text,
+            OutputFormat::Json => CoreReportFormat::Json,
+            OutputFormat::Html => CoreReportFormat::Html,
+            OutputFormat::Svg => CoreReportFormat::Svg,
         }
     }
 }
@@ -218,6 +243,18 @@ async fn main() -> std::result::Result<(), AppError> {
     println!("Timeout: {} seconds", args.timeout);
     println!("Output format: {:?}", args.output);
     
+    if args.histograms {
+        println!("Histograms: Enabled");
+    }
+    
+    if args.detailed {
+        println!("Detailed report: Enabled");
+    }
+    
+    if let Some(file) = &args.output_file {
+        println!("Output file: {}", file);
+    }
+    
     // Create a client with the specified timeout
     debug!("Creating HTTP client with timeout: {}s", args.timeout);
     let client = Runner::create_client(args.timeout)
@@ -319,9 +356,25 @@ async fn main() -> std::result::Result<(), AppError> {
             println!("\nLoad test completed in {:.2} seconds", test_duration.as_secs_f64());
             info!("Load test completed in {:.2} seconds", test_duration.as_secs_f64());
             
-            // Generate and output report
-            let report = generate_report(&results, args.output.to_report_format());
-            println!("\n{}", report);
+            // Create the report options
+            let report_options = ReportOptions {
+                format: args.output.to_core_report_format(),
+                output_file: args.output_file.clone(),
+                include_histograms: args.histograms,
+                include_details: args.detailed,
+            };
+            
+            // Generate the report
+            info!("Generating report with format: {:?}", args.output);
+            let report = pressr_core::generate_report(&results, &report_options)
+                .map_err(AppError::Core)?;
+            
+            // Print the report to stdout if no output file was specified
+            if args.output_file.is_none() {
+                println!("\n{}", report);
+            } else {
+                println!("\nReport written to {}", args.output_file.unwrap());
+            }
         },
         Err(e) => {
             error!("Test request failed: {}", e);

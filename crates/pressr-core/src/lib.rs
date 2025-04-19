@@ -7,9 +7,11 @@ mod error;
 mod data;
 mod runner;
 mod result;
+mod report;
 
 // Re-export public API
 pub use error::{Error, Result};
 pub use data::{RequestData};
 pub use runner::{Runner, Config};
-pub use result::{RequestResult, LoadTestResults}; 
+pub use result::{RequestResult, LoadTestResults};
+pub use report::{ReportFormat, ReportOptions, generate_report}; 
