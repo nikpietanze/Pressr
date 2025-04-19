@@ -376,6 +376,11 @@ fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> R
             }
             body style="background-color: #0f1118; color: #e2e8f0;" {
                 div class="mx-auto px-5 py-5 max-w-7xl" {
+                    // Add logo at the top
+                    div class="flex justify-center mb-8" {
+                        img src="../../../assets/images/pressr-logo-transparent-md.png" alt="Pressr Logo" class="h-24" {}
+                    }
+                    
                     div class="flex justify-between items-center mb-6" {
                         div {
                             h1 class="text-3xl font-bold text-white" { "Load Test Report" }
