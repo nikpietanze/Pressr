@@ -1,18 +1,17 @@
 use clap::{Parser, ValueEnum};
-use reqwest::{Client, Method, header::{HeaderMap, HeaderName, HeaderValue}};
-use std::{path::PathBuf, str::FromStr, time::Duration};
+use reqwest::{Method, header::{HeaderMap, HeaderName, HeaderValue}};
+use std::{path::PathBuf, str::FromStr};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
-mod data;
-mod runner;
+// Import pressr-core
+use pressr_core::{Result, Error, RequestData, Runner, Config};
+
 mod report;
 mod error;
 
-use data::RequestData;
-use runner::Runner;
 use report::{ReportFormat, generate_report};
-use error::{AppError, Result};
+use error::AppError;
 
 /// pressr - A load testing tool for APIs and applications
 #[derive(Parser, Debug)]
@@ -136,10 +135,12 @@ fn init_logger(verbose: bool) {
     let filter = if verbose {
         EnvFilter::from_default_env()
             .add_directive("pressr_cli=debug".parse().unwrap())
+            .add_directive("pressr_core=debug".parse().unwrap())
             .add_directive("warn".parse().unwrap())
     } else {
         EnvFilter::from_default_env()
             .add_directive("pressr_cli=info".parse().unwrap())
+            .add_directive("pressr_core=info".parse().unwrap())
             .add_directive("warn".parse().unwrap())
     };
     
@@ -150,7 +151,7 @@ fn init_logger(verbose: bool) {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::result::Result<(), AppError> {
     let args = Args::parse();
     
     // Initialize the logger based on verbosity
@@ -219,17 +220,15 @@ async fn main() -> Result<()> {
     
     // Create a client with the specified timeout
     debug!("Creating HTTP client with timeout: {}s", args.timeout);
-    let client = Client::builder()
-        .timeout(Duration::from_secs(args.timeout))
-        .build()
+    let client = Runner::create_client(args.timeout)
         .map_err(|e| {
             error!("Failed to create HTTP client: {}", e);
-            AppError::Request(e)
+            AppError::Core(e)
         })?;
     
     // Parse command-line headers
     debug!("Parsing command-line headers");
-    let mut headers = parse_headers(&args.headers)?;
+    let mut headers = parse_headers(&args.headers).map_err(AppError::Core)?;
     
     // Add headers from data file if available
     if let Some(data) = &request_data {
@@ -281,7 +280,7 @@ async fn main() -> Result<()> {
             let body = response.text().await
                 .map_err(|e| {
                     error!("Failed to read test response body: {}", e);
-                    AppError::Request(e)
+                    AppError::Core(Error::HttpClient(e))
                 })?;
             
             println!("Test request completed in {} ms", duration.as_millis());
@@ -300,19 +299,21 @@ async fn main() -> Result<()> {
             // Now proceed with the actual load test
             println!("\nStarting load test with {} requests ({} concurrent)...", args.requests, args.concurrency);
             
-            // Create and run the load test
-            let runner = Runner::new(
-                client,
-                args.url,
-                args.method.to_reqwest_method(),
+            // Create the runner config
+            let config = Config {
+                url: args.url,
+                method: args.method.to_reqwest_method(),
                 headers,
-                request_data,
-                args.requests,
-                args.concurrency,
-            );
+                request_count: args.requests,
+                concurrency: args.concurrency,
+                timeout: args.timeout,
+            };
+            
+            // Create and run the load test
+            let runner = Runner::new(client, config, request_data);
             
             let test_start = std::time::Instant::now();
-            let results = runner.run().await?;
+            let results = runner.run().await.map_err(AppError::Core)?;
             let test_duration = test_start.elapsed();
             
             println!("\nLoad test completed in {:.2} seconds", test_duration.as_secs_f64());
@@ -326,7 +327,7 @@ async fn main() -> Result<()> {
             error!("Test request failed: {}", e);
             eprintln!("Test request failed: {}", e);
             eprintln!("Cannot proceed with load test due to test request failure");
-            return Err(AppError::Request(e));
+            return Err(AppError::Core(Error::HttpClient(e)));
         }
     }
     

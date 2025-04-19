@@ -24,6 +24,10 @@ pub enum AppError {
     #[error("Runner error: {0}")]
     Runner(#[from] RunnerError),
     
+    /// Core library errors
+    #[error("Core error: {0}")]
+    Core(#[from] pressr_core::Error),
+    
     /// Generic error with message
     #[error("{0}")]
     Generic(String),
