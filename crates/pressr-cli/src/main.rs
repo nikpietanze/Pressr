@@ -7,7 +7,6 @@ use tracing_subscriber::{fmt, EnvFilter};
 // Import pressr-core
 use pressr_core::{Result, Error, RequestData, Runner, Config, ReportFormat as CoreReportFormat, ReportOptions};
 
-mod report;
 mod error;
 
 use error::AppError;

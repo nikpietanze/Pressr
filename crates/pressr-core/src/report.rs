@@ -2,14 +2,12 @@ use crate::result::{LoadTestResults, RequestResult};
 use crate::error::{Error, Result};
 use hdrhistogram::Histogram;
 use plotters::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
 use tracing::{debug, info, instrument, warn};
-use maud::{html, Markup, DOCTYPE, PreEscaped};
+use maud::PreEscaped;
 use serde::Serialize;
-use std::time::Duration;
 use chrono;
 
 /// Report format
