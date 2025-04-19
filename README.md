@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="pressr-logo-transparent.png" width="160" alt="pressr logo" />
+  <img src="pressr-logo-transparent.png" width="320" alt="pressr logo" />
 </p>
 
 <h1 align="center">Pressr</h1>
