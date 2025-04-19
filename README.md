@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="pressr-logo-transparent.png" width="320" alt="pressr logo" />
+  <img src="pressr-logo-transparent.png" width="240" alt="pressr logo" />
 </p>
-
-<h1 align="center">Pressr</h1>
 
 <p align="center">
   ⚡️ Load test APIs and applications with thousands of concurrent requests. Designed for modern devs. Built for open-source scalability.
