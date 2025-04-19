@@ -10,7 +10,6 @@ use pressr_core::{Result, Error, RequestData, Runner, Config, ReportFormat as Co
 mod report;
 mod error;
 
-use report::{ReportFormat, generate_report};
 use error::AppError;
 
 /// pressr - A load testing tool for APIs and applications
@@ -101,16 +100,6 @@ enum OutputFormat {
 }
 
 impl OutputFormat {
-    /// Convert OutputFormat to ReportFormat
-    fn to_report_format(&self) -> ReportFormat {
-        match self {
-            OutputFormat::Text => ReportFormat::Text,
-            OutputFormat::Json => ReportFormat::Json,
-            OutputFormat::Html => ReportFormat::Html,
-            OutputFormat::Svg => ReportFormat::Svg,
-        }
-    }
-    
     /// Convert OutputFormat to CoreReportFormat
     fn to_core_report_format(&self) -> CoreReportFormat {
         match self {

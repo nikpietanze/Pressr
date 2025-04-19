@@ -52,86 +52,6 @@ impl Default for ReportOptions {
     }
 }
 
-/// Summary statistics for test results
-#[derive(Debug, Clone)]
-pub struct TestSummary {
-    pub total_requests: usize,
-    pub successful_requests: usize,
-    pub failed_requests: usize,
-    pub total_time: Duration,
-    pub mean_response_time: f64,
-    pub min_response_time: f64,
-    pub max_response_time: f64,
-    pub rps: f64,
-    pub percentiles: Option<HashMap<String, f64>>,
-}
-
-impl TestSummary {
-    /// Create a new TestSummary from test results
-    pub fn new(results: &[RequestResult], total_time: Duration) -> Self {
-        let total_requests = results.len();
-        let successful_requests = results.iter().filter(|r| r.success).count();
-        let failed_requests = total_requests - successful_requests;
-        
-        let total_response_time: f64 = results.iter().map(|r| r.response_time as f64).sum();
-        let mean_response_time = if total_requests > 0 {
-            total_response_time / total_requests as f64
-        } else {
-            0.0
-        };
-        
-        let min_response_time = results
-            .iter()
-            .map(|r| r.response_time as f64)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(0.0);
-            
-        let max_response_time = results
-            .iter()
-            .map(|r| r.response_time as f64)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(0.0);
-            
-        let rps = if total_time.as_secs_f64() > 0.0 {
-            total_requests as f64 / total_time.as_secs_f64()
-        } else {
-            0.0
-        };
-        
-        let percentiles = if !results.is_empty() {
-            // Create a histogram for percentile calculation
-            match create_histogram_from_results(results) {
-                Some(hist) => {
-                    let mut map = HashMap::new();
-                    
-                    // Extract various percentiles and convert u64 to f64
-                    map.insert("p50".to_string(), hist.value_at_percentile(50.0) as f64);
-                    map.insert("p90".to_string(), hist.value_at_percentile(90.0) as f64);
-                    map.insert("p95".to_string(), hist.value_at_percentile(95.0) as f64);
-                    map.insert("p99".to_string(), hist.value_at_percentile(99.0) as f64);
-                    
-                    Some(map)
-                },
-                None => None
-            }
-        } else {
-            None
-        };
-        
-        TestSummary {
-            total_requests,
-            successful_requests,
-            failed_requests,
-            total_time,
-            mean_response_time,
-            min_response_time,
-            max_response_time,
-            rps,
-            percentiles,
-        }
-    }
-}
-
 // Disable the warnings for instrument macro as it's an environmental issue
 #[allow(warnings)]
 #[instrument(skip(results, options))]
@@ -143,12 +63,7 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         ReportFormat::Text => generate_text_report(results, options),
         ReportFormat::Json => generate_json_report(results, options),
         ReportFormat::Html => generate_html_report(results, options),
-        ReportFormat::Svg => {
-            if !options.include_histograms {
-                return Err(Error::Other("SVG format is only available for histograms".to_string()));
-            }
-            generate_histogram_svg(results)
-        }
+        ReportFormat::Svg => generate_histogram_svg(results)
     }?;
     
     // Generate output file path (user-specified or auto-generated)
@@ -821,38 +736,23 @@ fn create_histogram(results: &LoadTestResults) -> Option<Histogram<u64>> {
         return None;
     }
     
-    // Create histogram with appropriate precision
-    // 3 significant figures of precision and value range from 1ms to 1 hour
-    let mut hist = Histogram::<u64>::new_with_bounds(1, 3_600_000, 3).ok()?;
+    // Create histogram with 3 significant figures precision
+    let mut hist = Histogram::<u64>::new_with_bounds(1, 3_600_000, 3)
+        .expect("Failed to create histogram with specified bounds");
     
+    // Record response times (in milliseconds)
     for result in &results.requests {
-        // Record each response time in milliseconds (convert from u128 to u64)
-        if let Err(e) = hist.record(result.response_time as u64) {
-            debug!("Failed to record in histogram: {}", e);
+        if result.success {
+            hist.record(result.response_time as u64)
+                .expect("Failed to record value in histogram");
         }
     }
     
-    Some(hist)
-}
-
-/// Create a histogram from raw results array
-fn create_histogram_from_results(results: &[RequestResult]) -> Option<Histogram<u64>> {
-    if results.is_empty() {
-        return None;
+    if hist.len() > 0 {
+        Some(hist)
+    } else {
+        None
     }
-    
-    // Create histogram with appropriate precision
-    // 3 significant figures of precision and value range from 1ms to 1 hour
-    let mut hist = Histogram::<u64>::new_with_bounds(1, 3_600_000, 3).ok()?;
-    
-    for result in results {
-        // Record each response time in milliseconds (convert from u128 to u64)
-        if let Err(e) = hist.record(result.response_time as u64) {
-            debug!("Failed to record in histogram: {}", e);
-        }
-    }
-    
-    Some(hist)
 }
 
 /// Calculate percentage
