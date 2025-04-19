@@ -62,13 +62,14 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: `crates/pressr-cli/Cargo.toml`.
     *   **Completed:** Added centralized error handling in a dedicated `error.rs` module using `thiserror`. Implemented structured logging with `tracing` and `tracing-subscriber` throughout the application. Added verbose mode with `-v/--verbose` flag for detailed logging. Improved error reporting and context in all modules.
 
-8.  **[ ] Core Library - Extract Reusable Logic:**
+8.  **[✓] Core Library - Extract Reusable Logic:**
     *   **Task:** Extract reusable core functionality into a separate library crate that can be used by different frontends.
     *   **Tool:** Rust workspace, cargo, refactoring.
     *   **Files:**
         *   Add: `crates/pressr-core/` directory and required files.
         *   Modify: `crates/pressr-cli/` to use the core library.
         *   Modify: Root `Cargo.toml` to include the new crate in the workspace.
+    *   **Completed:** Created a new `pressr-core` library crate that contains all the reusable logic: data models, error handling, HTTP request runner, and results processing. Refactored the CLI to use the core library instead of its own implementation, removing duplicate code. Updated the workspace configuration to include both crates.
 
 **Future Considerations:**
 
