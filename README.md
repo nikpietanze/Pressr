@@ -60,4 +60,4 @@ pressr --url https://api.example.com/endpoint \
 
 ## License
 
-This project is licensed under [TODO: Add license].
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
