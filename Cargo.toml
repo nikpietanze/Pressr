@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/pressr-cli",
+    "crates/pressr-core",
 ]
 resolver = "3"
 
