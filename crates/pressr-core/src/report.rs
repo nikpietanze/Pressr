@@ -55,6 +55,36 @@ impl Default for ReportOptions {
 
 const HTML_TEMPLATE: &str = include_str!("../templates/report.html");
 
+/// Preprocessed data for report generation
+pub struct PreprocessedData<'a> {
+    /// Reference to the original results
+    pub results: &'a LoadTestResults,
+    /// Calculated histogram (if available)
+    pub histogram: Option<Histogram<u64>>,
+}
+
+impl<'a> PreprocessedData<'a> {
+    /// Create a new PreprocessedData instance with calculated histogram and percentiles
+    pub fn new(results: &'a LoadTestResults) -> Self {
+        // Calculate histogram once
+        let histogram = create_histogram(results);
+        
+        Self {
+            results,
+            histogram,
+        }
+    }
+    
+    /// Get percentile value
+    pub fn percentile(&self, p: f64) -> Option<f64> {
+        if let Some(hist) = &self.histogram {
+            Some(hist.value_at_percentile(p) as f64)
+        } else {
+            None
+        }
+    }
+}
+
 // Disable the warnings for instrument macro as it's an environmental issue
 #[allow(warnings)]
 #[instrument(skip(results, options))]
@@ -62,15 +92,52 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
     info!("Generating {:?} report for load test with {} requests", 
           options.format, results.total_requests);
     
+    // Preprocess data (histogram, percentiles) once
+    let preprocessed = PreprocessedData::new(results);
+    
     let report = match options.format {
-        ReportFormat::Text => generate_text_report(results, options),
-        ReportFormat::Json => generate_json_report(results, options),
-        ReportFormat::Html => generate_html_report(results, options),
-        ReportFormat::Svg => generate_histogram_svg(results)
+        ReportFormat::Text => generate_text_report(&preprocessed, options),
+        ReportFormat::Json => generate_json_report(&preprocessed, options),
+        ReportFormat::Html => generate_html_report(&preprocessed, options),
+        ReportFormat::Svg => generate_histogram_svg(&preprocessed)
     }?;
     
+    // Get the output path (using the helper function)
+    let output_path = get_output_path(options)?;
+    
+    // For HTML reports, copy the logo file to the reports directory
+    if options.format == ReportFormat::Html {
+        copy_logo_file(options)?;
+    }
+    
+    debug!("Writing report to: {}", output_path);
+    let mut file = File::create(&output_path)
+        .map_err(|e| Error::Io(e))?;
+    file.write_all(report.as_bytes())
+        .map_err(|e| Error::Io(e))?;
+    info!("Report written to {}", output_path);
+    
+    Ok(report)
+}
+
+/// Get output file path based on options
+fn get_output_path(options: &ReportOptions) -> Result<String> {
+    // Get the project root directory (or working directory)
+    let project_root = std::env::current_dir()
+        .map_err(|e| Error::Io(e))?;
+    
     // Get the output directory (user-specified or default 'reports/')
-    let output_dir = options.output_dir.as_deref().unwrap_or("reports");
+    let base_dir = if let Some(dir) = &options.output_dir {
+        if std::path::Path::new(dir).is_absolute() {
+            dir.clone()
+        } else {
+            // Relative path - prepend project root
+            project_root.join(dir).to_string_lossy().to_string()
+        }
+    } else {
+        // Default to 'reports/' in project root
+        project_root.join("reports").to_string_lossy().to_string()
+    };
     
     // Generate output file path (user-specified or auto-generated)
     let output_path = if let Some(path) = &options.output_file {
@@ -83,7 +150,7 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
             .unwrap_or_else(|| path.clone());
         
         // Place in the specified output directory
-        format!("{}/{}", output_dir, filename)
+        format!("{}/{}", base_dir, filename)
     } else {
         // Auto-generate filename with format "report_N.ext"
         let extension = match options.format {
@@ -98,7 +165,7 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         let mut output_path;
         
         loop {
-            output_path = format!("{}/report_{}.{}", output_dir, counter, extension);
+            output_path = format!("{}/report_{}.{}", base_dir, counter, extension);
             
             // Check if file already exists
             if !std::path::Path::new(&output_path).exists() {
@@ -121,41 +188,54 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         }
     }
     
-    // For HTML reports, copy the logo file to the reports directory
-    if options.format == ReportFormat::Html {
-        // Get the path to the logo file
-        let logo_src_path = "assets/images/pressr-logo.png";
-        let logo_dest_path = format!("{}/pressr-logo.png", output_dir);
-        
-        // Only copy if the source exists
-        if std::path::Path::new(logo_src_path).exists() {
-            debug!("Copying logo file to reports directory");
-            if let Err(e) = fs::copy(logo_src_path, &logo_dest_path) {
-                warn!("Failed to copy logo file: {}", e);
-                // Don't fail the report generation if logo copy fails
-            } else {
-                debug!("Logo file copied to {}", logo_dest_path);
-            }
+    Ok(output_path)
+}
+
+/// Copy logo file for HTML reports
+fn copy_logo_file(options: &ReportOptions) -> Result<()> {
+    // Get the project root directory
+    let project_root = std::env::current_dir()
+        .map_err(|e| Error::Io(e))?;
+    
+    // Get the output directory (user-specified or default 'reports/')
+    let base_dir = if let Some(dir) = &options.output_dir {
+        if std::path::Path::new(dir).is_absolute() {
+            dir.clone()
         } else {
-            warn!("Logo file not found at {}", logo_src_path);
+            // Relative path - prepend project root
+            project_root.join(dir).to_string_lossy().to_string()
         }
+    } else {
+        // Default to 'reports/' in project root
+        project_root.join("reports").to_string_lossy().to_string()
+    };
+    
+    // Get the path to the logo file (in the assets directory relative to project root)
+    let logo_src_path = project_root.join("assets/images/pressr-logo.png").to_string_lossy().to_string();
+    let logo_dest_path = format!("{}/pressr-logo.png", base_dir);
+    
+    // Only copy if the source exists
+    if std::path::Path::new(&logo_src_path).exists() {
+        debug!("Copying logo file to reports directory");
+        if let Err(e) = fs::copy(&logo_src_path, &logo_dest_path) {
+            warn!("Failed to copy logo file: {}", e);
+            // Don't fail the report generation if logo copy fails
+        } else {
+            debug!("Logo file copied to {}", logo_dest_path);
+        }
+    } else {
+        warn!("Logo file not found at {}", logo_src_path);
     }
     
-    debug!("Writing report to: {}", output_path);
-    let mut file = File::create(&output_path)
-        .map_err(|e| Error::Io(e))?;
-    file.write_all(report.as_bytes())
-        .map_err(|e| Error::Io(e))?;
-    info!("Report written to {}", output_path);
-    
-    Ok(report)
+    Ok(())
 }
 
 // Disable the warnings for instrument macro
 #[allow(warnings)]
-#[instrument(skip(results, options))]
-fn generate_text_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
+#[instrument(skip(preprocessed, options))]
+fn generate_text_report(preprocessed: &PreprocessedData, options: &ReportOptions) -> Result<String> {
     debug!("Generating text report");
+    let results = preprocessed.results;
     let mut report = String::new();
     
     // Header
@@ -184,11 +264,17 @@ fn generate_text_report(results: &LoadTestResults, options: &ReportOptions) -> R
     report.push_str(&format!("Maximum:            {} ms\n", results.max_response_time));
     
     // Add percentiles
-    if let Some(hist) = create_histogram(results) {
-        report.push_str(&format!("50th percentile:     {:.2} ms\n", hist.value_at_percentile(50.0) as f64));
-        report.push_str(&format!("90th percentile:     {:.2} ms\n", hist.value_at_percentile(90.0) as f64));
-        report.push_str(&format!("95th percentile:     {:.2} ms\n", hist.value_at_percentile(95.0) as f64));
-        report.push_str(&format!("99th percentile:     {:.2} ms\n", hist.value_at_percentile(99.0) as f64));
+    if let Some(p50) = preprocessed.percentile(50.0) {
+        report.push_str(&format!("50th percentile:     {:.2} ms\n", p50));
+        if let Some(p90) = preprocessed.percentile(90.0) {
+            report.push_str(&format!("90th percentile:     {:.2} ms\n", p90));
+        }
+        if let Some(p95) = preprocessed.percentile(95.0) {
+            report.push_str(&format!("95th percentile:     {:.2} ms\n", p95));
+        }
+        if let Some(p99) = preprocessed.percentile(99.0) {
+            report.push_str(&format!("99th percentile:     {:.2} ms\n", p99));
+        }
     }
     report.push_str("\n");
     
@@ -249,8 +335,8 @@ fn generate_text_report(results: &LoadTestResults, options: &ReportOptions) -> R
 
 // Disable the warnings for instrument macro
 #[allow(warnings)]
-#[instrument(skip(results, options))]
-fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
+#[instrument(skip(preprocessed, options))]
+fn generate_json_report(preprocessed: &PreprocessedData, options: &ReportOptions) -> Result<String> {
     debug!("Generating JSON report");
     
     #[derive(Serialize)]
@@ -283,7 +369,7 @@ fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> R
     
     // Calculate percentiles if histograms are enabled
     let percentiles = if options.include_histograms {
-        if let Some(hist) = create_histogram(results) {
+        if let Some(hist) = create_histogram(preprocessed.results) {
             let mut map = HashMap::new();
             
             map.insert("p50".to_string(), hist.value_at_percentile(50.0) as f64);
@@ -302,31 +388,31 @@ fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> R
     };
     
     // Convert status_codes HashMap to BTreeMap for deterministic ordering
-    let status_codes = results.status_codes.clone();
+    let status_codes = preprocessed.results.status_codes.clone();
     
     // Convert errors HashMap to BTreeMap for deterministic ordering
-    let error_counts = results.errors.clone();
+    let error_counts = preprocessed.results.errors.clone();
     
     // Calculate percentages
-    let success_rate = percentage(results.successful_requests, results.total_requests);
-    let failure_rate = percentage(results.failed_requests, results.total_requests);
+    let success_rate = percentage(preprocessed.results.successful_requests, preprocessed.results.total_requests);
+    let failure_rate = percentage(preprocessed.results.failed_requests, preprocessed.results.total_requests);
     
     // Optional detailed results
     let request_details = if options.include_details {
-        Some(&results.requests)
+        Some(&preprocessed.results.requests)
     } else {
         None
     };
     
     // Create the JSON report
     let report = JsonReport {
-        completed_requests: results.total_requests,
-        successful_requests: results.successful_requests,
-        failed_requests: results.failed_requests,
-        total_duration_secs: results.duration_secs,
-        avg_duration_ms: results.average_response_time,
-        min_duration_ms: results.min_response_time,
-        max_duration_ms: results.max_response_time,
+        completed_requests: preprocessed.results.total_requests,
+        successful_requests: preprocessed.results.successful_requests,
+        failed_requests: preprocessed.results.failed_requests,
+        total_duration_secs: preprocessed.results.duration_secs,
+        avg_duration_ms: preprocessed.results.average_response_time,
+        min_duration_ms: preprocessed.results.min_response_time,
+        max_duration_ms: preprocessed.results.max_response_time,
         percentiles,
         success_rate,
         failure_rate,
@@ -334,11 +420,11 @@ fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> R
         error_counts,
         
         // New fields
-        throughput: results.throughput,
-        response_time_std_dev: results.response_time_std_dev,
-        total_data_transferred: results.total_data_transferred,
-        transfer_rate: results.transfer_rate,
-        response_time_distribution: &results.response_time_distribution,
+        throughput: preprocessed.results.throughput,
+        response_time_std_dev: preprocessed.results.response_time_std_dev,
+        total_data_transferred: preprocessed.results.total_data_transferred,
+        transfer_rate: preprocessed.results.transfer_rate,
+        response_time_distribution: &preprocessed.results.response_time_distribution,
         
         request_details,
     };
@@ -352,31 +438,31 @@ fn generate_json_report(results: &LoadTestResults, options: &ReportOptions) -> R
 }
 
 /// Generate an enhanced HTML report with interactive charts
-fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> Result<String> {
+fn generate_html_report(preprocessed: &PreprocessedData, options: &ReportOptions) -> Result<String> {
     debug!("Generating enhanced HTML report");
     
     // Create chart data in JSON format for the JavaScript charts
     let chart_data = serde_json::json!({
         "summary": {
-            "total": results.total_requests,
-            "successful": results.successful_requests,
-            "failed": results.failed_requests,
-            "duration": results.duration_secs
+            "total": preprocessed.results.total_requests,
+            "successful": preprocessed.results.successful_requests,
+            "failed": preprocessed.results.failed_requests,
+            "duration": preprocessed.results.duration_secs
         },
         "timing": {
-            "average": results.average_response_time,
-            "min": results.min_response_time,
-            "max": results.max_response_time,
-            "stdDev": results.response_time_std_dev,
-            "throughput": results.throughput,
-            "transferRate": results.transfer_rate
+            "average": preprocessed.results.average_response_time,
+            "min": preprocessed.results.min_response_time,
+            "max": preprocessed.results.max_response_time,
+            "stdDev": preprocessed.results.response_time_std_dev,
+            "throughput": preprocessed.results.throughput,
+            "transferRate": preprocessed.results.transfer_rate
         },
         "distribution": {
-            "responseTimes": results.response_time_distribution,
-            "statusCodes": results.status_codes
+            "responseTimes": preprocessed.results.response_time_distribution,
+            "statusCodes": preprocessed.results.status_codes
         },
-        "percentiles": create_percentile_data(results),
-        "errors": results.errors
+        "percentiles": create_percentile_data(preprocessed.results),
+        "errors": preprocessed.results.errors
     });
     
     // Format the chart data as JSON string for embedding in the HTML
@@ -400,7 +486,7 @@ fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> R
     
     // Generate and embed SVG histograms if requested
     let html = if options.include_histograms {
-        let response_time_histogram = generate_histogram_svg_embedded(results, "Response Time Distribution (ms)")?;
+        let response_time_histogram = generate_histogram_svg_embedded(preprocessed.results, "Response Time Distribution (ms)")?;
         html.replace("<!-- HISTOGRAM_PLACEHOLDER -->", &response_time_histogram)
     } else {
         html.replace("<!-- HISTOGRAM_PLACEHOLDER -->", "")
@@ -438,7 +524,7 @@ fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> R
         details_html.push_str(r#"<div class="table-container"><table class="details-table" id="request-details-table">"#);
         details_html.push_str("<thead><tr><th>#</th><th>Status</th><th>Time (ms)</th><th>Size (bytes)</th><th>Result</th></tr></thead><tbody>");
         
-        for (i, result) in results.requests.iter().enumerate() {
+        for (i, result) in preprocessed.results.requests.iter().enumerate() {
             let status = result.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
             let size = result.response_size.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
             let result_text = if result.success {
@@ -494,6 +580,206 @@ fn generate_html_report(results: &LoadTestResults, options: &ReportOptions) -> R
     };
     
     Ok(html)
+}
+
+/// Create percentile data for charts
+fn create_percentile_data(results: &LoadTestResults) -> HashMap<String, f64> {
+    let mut percentiles = HashMap::new();
+    
+    if let Some(hist) = create_histogram(results) {
+        // Add standard percentiles
+        percentiles.insert("p50".to_string(), hist.value_at_percentile(50.0) as f64);
+        percentiles.insert("p75".to_string(), hist.value_at_percentile(75.0) as f64);
+        percentiles.insert("p90".to_string(), hist.value_at_percentile(90.0) as f64);
+        percentiles.insert("p95".to_string(), hist.value_at_percentile(95.0) as f64);
+        percentiles.insert("p99".to_string(), hist.value_at_percentile(99.0) as f64);
+        percentiles.insert("p999".to_string(), hist.value_at_percentile(99.9) as f64);
+    }
+    
+    percentiles
+}
+
+// Disable the warnings for instrument macro
+#[allow(warnings)]
+#[instrument(skip(preprocessed))]
+fn generate_histogram_svg(preprocessed: &PreprocessedData) -> Result<String> {
+    debug!("Generating SVG histogram");
+    
+    // Create a buffer for the SVG
+    let mut buffer = String::new();
+    
+    // Extract response times
+    let response_times: Vec<f64> = preprocessed.results.requests.iter()
+        .map(|r| r.response_time as f64)
+        .collect();
+    
+    if response_times.is_empty() {
+        return Err(Error::Other("No data available for histogram".to_string()));
+    }
+    
+    // Find min and max times
+    let min_time = *response_times.iter()
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap();
+    let max_time = *response_times.iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap();
+    
+    let range = max_time - min_time;
+    if range <= 0.0 {
+        return Err(Error::Other("Cannot generate histogram with zero range".to_string()));
+    }
+    
+    // Number of buckets for the histogram
+    let bucket_count = 20;
+    
+    // Create SVG
+    {
+        // Define dark theme colors
+        let dark_bg = RGBColor(15, 17, 24);  // #0f1118
+        let card_bg = RGBColor(21, 26, 39);  // #151a27
+        let grid_line = RGBColor(30, 41, 59); // #1e293b
+        let text_color = RGBColor(148, 163, 184); // #94a3b8
+        let purple_bar = RGBColor(126, 34, 206); // #7e22ce
+        let purple_bar_alpha = purple_bar.mix(0.8); // with opacity
+        let green_line = RGBColor(34, 197, 94); // #22c55e - p50
+        let orange_line = RGBColor(234, 88, 12); // #ea580c - p90
+        let pink_line = RGBColor(219, 39, 119); // #db2777 - p95
+        let red_line = RGBColor(239, 68, 68); // #ef4444 - p99
+        
+        let root = SVGBackend::with_string(&mut buffer, (1000, 400))
+            .into_drawing_area();
+        
+        root.fill(&dark_bg)
+            .map_err(|_| Error::Other("Failed to fill SVG background".to_string()))?;
+        
+        // Add a bit of padding to max
+        let padding = range * 0.05;
+        let max_time_with_padding = max_time + padding;
+        
+        // Create histogram data by bucket
+        let bucket_size = (max_time_with_padding - min_time) / bucket_count as f64;
+        let mut histogram_data = Vec::new();
+        let mut x = min_time;
+        
+        for _ in 0..bucket_count {
+            let next_x = x + bucket_size;
+            let mut count = 0;
+            
+            // Count samples in this bucket
+            for &time in &response_times {
+                if time >= x && time < next_x {
+                    count += 1;
+                }
+            }
+            
+            histogram_data.push((x, count));
+            x = next_x;
+        }
+        
+        // Determine y scale
+        let max_count = histogram_data.iter()
+            .map(|(_, count)| *count)
+            .max()
+            .unwrap_or(0);
+        
+        // Create the chart
+        let mut chart = ChartBuilder::on(&root)
+            .margin(25)
+            .x_label_area_size(50)
+            .y_label_area_size(60)
+            .build_cartesian_2d(
+                min_time..max_time_with_padding,
+                0.0..max_count as f64 * 1.1
+            )
+            .map_err(|_| Error::Other("Failed to create chart".to_string()))?;
+        
+        chart.configure_mesh()
+            .x_desc("Response Time (ms)")
+            .y_desc("Request Count")
+            .axis_desc_style(("sans-serif", 12).into_font().color(&text_color))
+            .label_style(("sans-serif", 11).into_font().color(&text_color))
+            .draw()
+            .map_err(|_| Error::Other("Failed to draw chart mesh".to_string()))?;
+        
+        // Draw histogram bars
+        chart.draw_series(
+            histogram_data.iter().map(|&(x, count)| {
+                Rectangle::new(
+                    [(x, 0.0), (x + bucket_size, count as f64)],
+                    purple_bar_alpha.filled(),
+                )
+            })
+        )
+        .map_err(|_| Error::Other("Failed to draw histogram bars".to_string()))?
+        .label("Response Times");
+        
+        // Draw the percentile lines
+        if let Some(hist) = &preprocessed.histogram {
+            let p50 = hist.value_at_percentile(50.0) as f64;
+            let p90 = hist.value_at_percentile(90.0) as f64;
+            let p95 = hist.value_at_percentile(95.0) as f64;
+            let p99 = hist.value_at_percentile(99.0) as f64;
+            
+            // Draw 50th percentile line
+            chart.draw_series(LineSeries::new(
+                vec![(p50, 0.0), (p50, max_count as f64)],
+                green_line.stroke_width(2),
+            ))
+            .map_err(|_| Error::Other("Failed to draw p50 line".to_string()))?
+            .label("50th Percentile");
+            
+            // Draw 90th percentile line
+            chart.draw_series(LineSeries::new(
+                vec![(p90, 0.0), (p90, max_count as f64)],
+                orange_line.stroke_width(2),
+            ))
+            .map_err(|_| Error::Other("Failed to draw p90 line".to_string()))?
+            .label("90th Percentile");
+            
+            // Draw 95th percentile line
+            chart.draw_series(LineSeries::new(
+                vec![(p95, 0.0), (p95, max_count as f64)],
+                pink_line.stroke_width(2),
+            ))
+            .map_err(|_| Error::Other("Failed to draw p95 line".to_string()))?
+            .label("95th Percentile");
+            
+            // Draw 99th percentile line
+            chart.draw_series(LineSeries::new(
+                vec![(p99, 0.0), (p99, max_count as f64)],
+                red_line.stroke_width(2),
+            ))
+            .map_err(|_| Error::Other("Failed to draw p99 line".to_string()))?
+            .label("99th Percentile");
+            
+            // Draw 99th percentile label on top
+            // Use draw_series with a single Text element instead of draw_text
+            chart.draw_series(std::iter::once(Text::new(
+                "99th",
+                (p99, max_count as f64 * 1.05),
+                ("sans-serif", 14).into_font().color(&pink_line)
+            )))
+            .map_err(|_| Error::Other("Failed to draw p99 label".to_string()))?;
+        }
+        
+        chart.configure_series_labels()
+            .position(SeriesLabelPosition::UpperRight)
+            .background_style(card_bg.filled())
+            .border_style(grid_line)
+            .label_font(("sans-serif", 12).into_font().color(&text_color))
+            .margin(10)
+            .draw()
+            .map_err(|_| Error::Other("Failed to draw chart legend".to_string()))?;
+        
+        // Ensure drawing is complete
+        root.present()
+            .map_err(|_| Error::Other("Failed to finalize SVG".to_string()))?;
+    }
+    
+    // Return the SVG as a string
+    debug!("SVG histogram generated ({} chars)", buffer.len());
+    Ok(buffer)
 }
 
 /// Generate standalone SVG histogram for embedding in HTML reports
@@ -623,206 +909,6 @@ fn generate_histogram_svg_embedded(results: &LoadTestResults, title: &str) -> Re
     Ok(buffer)
 }
 
-/// Create percentile data for charts
-fn create_percentile_data(results: &LoadTestResults) -> HashMap<String, f64> {
-    let mut percentiles = HashMap::new();
-    
-    if let Some(hist) = create_histogram(results) {
-        // Add standard percentiles
-        percentiles.insert("p50".to_string(), hist.value_at_percentile(50.0) as f64);
-        percentiles.insert("p75".to_string(), hist.value_at_percentile(75.0) as f64);
-        percentiles.insert("p90".to_string(), hist.value_at_percentile(90.0) as f64);
-        percentiles.insert("p95".to_string(), hist.value_at_percentile(95.0) as f64);
-        percentiles.insert("p99".to_string(), hist.value_at_percentile(99.0) as f64);
-        percentiles.insert("p999".to_string(), hist.value_at_percentile(99.9) as f64);
-    }
-    
-    percentiles
-}
-
-// Disable the warnings for instrument macro
-#[allow(warnings)]
-#[instrument(skip(results))]
-fn generate_histogram_svg(results: &LoadTestResults) -> Result<String> {
-    debug!("Generating SVG histogram");
-    
-    // Create a buffer for the SVG
-    let mut buffer = String::new();
-    
-    // Extract response times
-    let response_times: Vec<f64> = results.requests.iter()
-        .map(|r| r.response_time as f64)
-        .collect();
-    
-    if response_times.is_empty() {
-        return Err(Error::Other("No data available for histogram".to_string()));
-    }
-    
-    // Find min and max times
-    let min_time = *response_times.iter()
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap();
-    let max_time = *response_times.iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap();
-    
-    let range = max_time - min_time;
-    if range <= 0.0 {
-        return Err(Error::Other("Cannot generate histogram with zero range".to_string()));
-    }
-    
-    // Number of buckets for the histogram
-    let bucket_count = 20;
-    
-    // Create SVG
-    {
-        // Define dark theme colors
-        let dark_bg = RGBColor(15, 17, 24);  // #0f1118
-        let card_bg = RGBColor(21, 26, 39);  // #151a27
-        let grid_line = RGBColor(30, 41, 59); // #1e293b
-        let text_color = RGBColor(148, 163, 184); // #94a3b8
-        let purple_bar = RGBColor(126, 34, 206); // #7e22ce
-        let purple_bar_alpha = purple_bar.mix(0.8); // with opacity
-        let green_line = RGBColor(34, 197, 94); // #22c55e - p50
-        let orange_line = RGBColor(234, 88, 12); // #ea580c - p90
-        let pink_line = RGBColor(219, 39, 119); // #db2777 - p95
-        let red_line = RGBColor(239, 68, 68); // #ef4444 - p99
-        
-        let root = SVGBackend::with_string(&mut buffer, (1000, 400))
-            .into_drawing_area();
-        
-        root.fill(&dark_bg)
-            .map_err(|_| Error::Other("Failed to fill SVG background".to_string()))?;
-        
-        // Add a bit of padding to max
-        let padding = range * 0.05;
-        let max_time_with_padding = max_time + padding;
-        
-        // Create histogram data by bucket
-        let bucket_size = (max_time_with_padding - min_time) / bucket_count as f64;
-        let mut histogram_data = Vec::new();
-        let mut x = min_time;
-        
-        for _ in 0..bucket_count {
-            let next_x = x + bucket_size;
-            let mut count = 0;
-            
-            // Count samples in this bucket
-            for &time in &response_times {
-                if time >= x && time < next_x {
-                    count += 1;
-                }
-            }
-            
-            histogram_data.push((x, count));
-            x = next_x;
-        }
-        
-        // Determine y scale
-        let max_count = histogram_data.iter()
-            .map(|(_, count)| *count)
-            .max()
-            .unwrap_or(0);
-        
-        // Create the chart
-        let mut chart = ChartBuilder::on(&root)
-            .margin(25)
-            .x_label_area_size(50)
-            .y_label_area_size(60)
-            .build_cartesian_2d(
-                min_time..max_time_with_padding,
-                0.0..max_count as f64 * 1.1
-            )
-            .map_err(|_| Error::Other("Failed to create chart".to_string()))?;
-        
-        chart.configure_mesh()
-            .x_desc("Response Time (ms)")
-            .y_desc("Request Count")
-            .axis_desc_style(("sans-serif", 12).into_font().color(&text_color))
-            .label_style(("sans-serif", 11).into_font().color(&text_color))
-            .draw()
-            .map_err(|_| Error::Other("Failed to draw chart mesh".to_string()))?;
-        
-        // Draw histogram bars
-        chart.draw_series(
-            histogram_data.iter().map(|&(x, count)| {
-                Rectangle::new(
-                    [(x, 0.0), (x + bucket_size, count as f64)],
-                    purple_bar_alpha.filled(),
-                )
-            })
-        )
-        .map_err(|_| Error::Other("Failed to draw histogram bars".to_string()))?
-        .label("Response Times");
-        
-        // Draw the percentile lines
-        if let Some(hist) = create_histogram(results) {
-            let p50 = hist.value_at_percentile(50.0) as f64;
-            let p90 = hist.value_at_percentile(90.0) as f64;
-            let p95 = hist.value_at_percentile(95.0) as f64;
-            let p99 = hist.value_at_percentile(99.0) as f64;
-            
-            // Draw 50th percentile line
-            chart.draw_series(LineSeries::new(
-                vec![(p50, 0.0), (p50, max_count as f64)],
-                green_line.stroke_width(2),
-            ))
-            .map_err(|_| Error::Other("Failed to draw p50 line".to_string()))?
-            .label("50th Percentile");
-            
-            // Draw 90th percentile line
-            chart.draw_series(LineSeries::new(
-                vec![(p90, 0.0), (p90, max_count as f64)],
-                orange_line.stroke_width(2),
-            ))
-            .map_err(|_| Error::Other("Failed to draw p90 line".to_string()))?
-            .label("90th Percentile");
-            
-            // Draw 95th percentile line
-            chart.draw_series(LineSeries::new(
-                vec![(p95, 0.0), (p95, max_count as f64)],
-                pink_line.stroke_width(2),
-            ))
-            .map_err(|_| Error::Other("Failed to draw p95 line".to_string()))?
-            .label("95th Percentile");
-            
-            // Draw 99th percentile line
-            chart.draw_series(LineSeries::new(
-                vec![(p99, 0.0), (p99, max_count as f64)],
-                red_line.stroke_width(2),
-            ))
-            .map_err(|_| Error::Other("Failed to draw p99 line".to_string()))?
-            .label("99th Percentile");
-            
-            // Draw 99th percentile label on top
-            // Use draw_series with a single Text element instead of draw_text
-            chart.draw_series(std::iter::once(Text::new(
-                "99th",
-                (p99, max_count as f64 * 1.05),
-                ("sans-serif", 14).into_font().color(&pink_line)
-            )))
-            .map_err(|_| Error::Other("Failed to draw p99 label".to_string()))?;
-        }
-        
-        chart.configure_series_labels()
-            .position(SeriesLabelPosition::UpperRight)
-            .background_style(card_bg.filled())
-            .border_style(grid_line)
-            .label_font(("sans-serif", 12).into_font().color(&text_color))
-            .margin(10)
-            .draw()
-            .map_err(|_| Error::Other("Failed to draw chart legend".to_string()))?;
-        
-        // Ensure drawing is complete
-        root.present()
-            .map_err(|_| Error::Other("Failed to finalize SVG".to_string()))?;
-    }
-    
-    // Return the SVG as a string
-    debug!("SVG histogram generated ({} chars)", buffer.len());
-    Ok(buffer)
-}
-
 /// Create a histogram from the response times
 fn create_histogram(results: &LoadTestResults) -> Option<Histogram<u64>> {
     if results.requests.is_empty() {
@@ -855,9 +941,4 @@ fn percentage(part: usize, total: usize) -> f64 {
     } else {
         (part as f64 / total as f64) * 100.0
     }
-}
-
-// Helper function to calculate percentage for progress bars
-fn calculate_percentage(value: f64, max: f64) -> u32 {
-    ((value / max) * 100.0).min(100.0) as u32
 } 

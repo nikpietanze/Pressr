@@ -83,13 +83,13 @@ This document tracks the development tasks for the `pressr` load testing tool.
 
 **Refactoring & Cleanup:**
 
-10. **[ ] Optimize Histogram Calculation:**
+10. **[✓] Optimize Histogram Calculation:**
     *   **Task:** Calculate the `hdrhistogram::Histogram` once before report generation and pass it to relevant functions to avoid redundant computations.
     *   **Files:**
         *   Modify: `crates/pressr-core/src/report.rs`
         *   Modify: `crates/pressr-cli/src/main.rs` (potentially)
 
-11. **[ ] Refactor Report Path Generation:**
+11. **[✓] Refactor Report Path Generation:**
     *   **Task:** Extract the logic for determining the output file path (handling directories, auto-generation) into a dedicated helper function within `report.rs`.
     *   **Files:**
         *   Modify: `crates/pressr-core/src/report.rs`
