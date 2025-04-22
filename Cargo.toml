@@ -3,7 +3,7 @@ members = [
     "crates/pressr-cli",
     "crates/pressr-core",
 ]
-resolver = "3"
+resolver = "2"
 
 # Optional: Define default settings for all workspace members
 # [workspace.package]

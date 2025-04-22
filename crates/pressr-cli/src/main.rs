@@ -62,6 +62,14 @@ struct Args {
     /// Include detailed information about each request in the report
     #[arg(long)]
     detailed: bool,
+    
+    /// Generate multiple report formats at once (comma-separated list, e.g., "html,json")
+    #[arg(long)]
+    report_formats: Option<String>,
+    
+    /// Save report to custom output directory instead of 'reports/'
+    #[arg(long)]
+    output_dir: Option<String>,
 }
 
 /// Supported HTTP methods
@@ -96,6 +104,7 @@ enum OutputFormat {
     Json,
     Html,
     Svg,
+    All,
 }
 
 impl OutputFormat {
@@ -106,7 +115,22 @@ impl OutputFormat {
             OutputFormat::Json => CoreReportFormat::Json,
             OutputFormat::Html => CoreReportFormat::Html,
             OutputFormat::Svg => CoreReportFormat::Svg,
+            OutputFormat::All => CoreReportFormat::Html, // Default to HTML if 'All' is selected
         }
+    }
+    
+    /// Convert string to vector of OutputFormat
+    fn from_comma_separated(s: &str) -> Vec<OutputFormat> {
+        s.split(',')
+            .filter_map(|format| match format.trim().to_lowercase().as_str() {
+                "text" => Some(OutputFormat::Text),
+                "json" => Some(OutputFormat::Json),
+                "html" => Some(OutputFormat::Html),
+                "svg" => Some(OutputFormat::Svg),
+                "all" => Some(OutputFormat::All),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -350,6 +374,7 @@ async fn main() -> std::result::Result<(), AppError> {
                 output_file: args.output_file.clone(),
                 include_histograms: !args.no_histograms,
                 include_details: args.detailed,
+                output_dir: args.output_dir.clone(),
             };
             
             // Generate the report
@@ -361,16 +386,102 @@ async fn main() -> std::result::Result<(), AppError> {
             if args.output_file.is_none() {
                 println!("\n{}", report);
             } else {
+                let output_dir = args.output_dir.as_deref().unwrap_or("reports");
                 let output_path = if args.output_file.as_ref().unwrap().contains('/') || args.output_file.as_ref().unwrap().contains('\\') {
                     args.output_file.as_ref().unwrap().clone()
                 } else {
-                    format!("reports/{}", args.output_file.as_ref().unwrap())
+                    format!("{}/{}", output_dir, args.output_file.as_ref().unwrap())
                 };
                 println!("\nReport written to {}", output_path);
             }
             
             // The report has been saved to a file (path is logged by the core library)
             println!("\nReport generated successfully.");
+            
+            // Generate additional report formats if specified
+            if let Some(formats_str) = &args.report_formats {
+                let formats = OutputFormat::from_comma_separated(formats_str);
+                
+                if !formats.is_empty() {
+                    println!("\nGenerating additional report formats...");
+                    
+                    for format in formats {
+                        // Skip if it's the same as the primary format
+                        if format == args.output {
+                            continue;
+                        }
+                        
+                        let format_name = match format {
+                            OutputFormat::Text => "Text",
+                            OutputFormat::Json => "JSON",
+                            OutputFormat::Html => "HTML",
+                            OutputFormat::Svg => "SVG",
+                            OutputFormat::All => {
+                                // Generate all formats except the primary one
+                                for f in [OutputFormat::Text, OutputFormat::Json, OutputFormat::Html, OutputFormat::Svg] {
+                                    if f != args.output {
+                                        // Generate this format
+                                        let format_options = ReportOptions {
+                                            format: f.to_core_report_format(),
+                                            output_file: None, // Auto-generate filename
+                                            include_histograms: !args.no_histograms,
+                                            include_details: args.detailed,
+                                            output_dir: args.output_dir.clone(),
+                                        };
+                                        
+                                        match pressr_core::generate_report(&results, &format_options) {
+                                            Ok(_) => {
+                                                info!("Successfully generated {:?} report", f);
+                                            },
+                                            Err(e) => {
+                                                warn!("Failed to generate {:?} report: {}", f, e);
+                                                eprintln!("Warning: Failed to generate {:?} report: {}", f, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                        };
+                        
+                        // Determine filename for this format
+                        let filename = if let Some(base_name) = &args.output_file {
+                            // Use the base name but change the extension
+                            let path = std::path::Path::new(base_name);
+                            let stem = path.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("report"));
+                            let extension = match format {
+                                OutputFormat::Text => "txt",
+                                OutputFormat::Json => "json",
+                                OutputFormat::Html => "html",
+                                OutputFormat::Svg => "svg",
+                                OutputFormat::All => unreachable!(),
+                            };
+                            Some(format!("{}.{}", stem.to_string_lossy(), extension))
+                        } else {
+                            None
+                        };
+                        
+                        // Create options for this format
+                        let format_options = ReportOptions {
+                            format: format.to_core_report_format(),
+                            output_file: filename,
+                            include_histograms: !args.no_histograms,
+                            include_details: args.detailed,
+                            output_dir: args.output_dir.clone(),
+                        };
+                        
+                        match pressr_core::generate_report(&results, &format_options) {
+                            Ok(_) => {
+                                println!("Successfully generated {} report", format_name);
+                            },
+                            Err(e) => {
+                                warn!("Failed to generate {} report: {}", format_name, e);
+                                eprintln!("Warning: Failed to generate {} report: {}", format_name, e);
+                            }
+                        }
+                    }
+                }
+            }
         },
         Err(e) => {
             error!("Test request failed: {}", e);

@@ -154,11 +154,18 @@ impl Runner {
                         debug!("Request completed with status {} in {} ms",
                                status, response_time);
                         
+                        let success = status.is_success();
+                        let error = if !success {
+                            Some(format!("HTTP Error: {} {}", status_code, status.canonical_reason().unwrap_or("Unknown")))
+                        } else {
+                            None
+                        };
+                        
                         RequestResult {
                             status: Some(status_code),
                             response_time,
-                            success: status.is_success(),
-                            error: None,
+                            success,
+                            error,
                             response_size: Some(body.len()),
                         }
                     },

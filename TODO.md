@@ -71,7 +71,7 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Modify: Root `Cargo.toml` to include the new crate in the workspace.
     *   **Completed:** Created a new `pressr-core` library crate that contains all the reusable logic: data models, error handling, HTTP request runner, and results processing. Refactored the CLI to use the core library instead of its own implementation, removing duplicate code. Updated the workspace configuration to include both crates.
 
-9.  **[ ] Advanced Reporting:**
+9.  **[✓] Advanced Reporting:**
     *   **Task:** Enhance report generation with histograms, save reports to files (JSON, HTML), and add more detailed statistics.
     *   **Tool:** Use `plotters` for histograms, file I/O for saving, HTML templates for web reports.
     *   **Files:**
@@ -79,6 +79,20 @@ This document tracks the development tasks for the `pressr` load testing tool.
         *   Add: `crates/pressr-core/src/report.rs` (core report generation).
         *   Modify: `crates/pressr-cli/src/report.rs` (CLI-specific reporting).
         *   Modify: `crates/pressr-cli/src/main.rs` (add CLI flags for report options).
+    *   **Completed:** Enhanced report generation with interactive visualizations using Chart.js, added advanced statistics (throughput, response time distribution, percentiles, and data transfer metrics). Implemented multiple report format support with a modular HTML template system. Added SVG histograms with percentile lines. Enabled custom output directory and self-contained report options.
+
+**Refactoring & Cleanup:**
+
+10. **[ ] Optimize Histogram Calculation:**
+    *   **Task:** Calculate the `hdrhistogram::Histogram` once before report generation and pass it to relevant functions to avoid redundant computations.
+    *   **Files:**
+        *   Modify: `crates/pressr-core/src/report.rs`
+        *   Modify: `crates/pressr-cli/src/main.rs` (potentially)
+
+11. **[ ] Refactor Report Path Generation:**
+    *   **Task:** Extract the logic for determining the output file path (handling directories, auto-generation) into a dedicated helper function within `report.rs`.
+    *   **Files:**
+        *   Modify: `crates/pressr-core/src/report.rs`
 
 **Future Considerations:**
 

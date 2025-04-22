@@ -29,6 +29,15 @@ pub enum Error {
 
     #[error("Missing required data: {0}")]
     MissingData(String),
+    
+    #[error("Plotting error: {0}")]
+    Plotting(String),
+    
+    #[error("Serialization error: {0}")]
+    Serialization(serde_json::Error),
+    
+    #[error("Report generation error: {0}")]
+    ReportGeneration(String),
 
     #[error("{0}")]
     Other(String),
