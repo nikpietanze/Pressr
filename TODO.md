@@ -94,6 +94,53 @@ This document tracks the development tasks for the `pressr` load testing tool.
     *   **Files:**
         *   Modify: `crates/pressr-core/src/report.rs`
 
-**Future Considerations:**
+**Tauri GUI Frontend:**
 
-*   **[ ] Alternative Frontends:** TUI, GUI (Tauri), Wasm web interface. 
+12. **[ ] Setup Tauri Project:**
+    *   **Task:** Integrate Tauri into the existing Rust workspace. Create a new crate (e.g., `crates/pressr-gui`) for the Tauri application.
+    *   **Tool:** `cargo tauri init`, `cargo`, Rust workspace management.
+    *   **Files:**
+        *   Modify: Root `Cargo.toml` (add new crate to workspace).
+        *   Add: `crates/pressr-gui/` directory with Tauri structure (`src/`, `src-tauri/`, `tauri.conf.json`, `Cargo.toml`, etc.).
+        *   Add: Frontend files (e.g., `index.html`, basic JS/CSS or framework setup).
+
+13. **[ ] Basic UI Layout:**
+    *   **Task:** Design and implement the initial user interface structure for inputting load test parameters (URL, method, requests, concurrency, headers, data file selection, timeout).
+    *   **Tool:** HTML, CSS, potentially a simple JS framework (like vanilla JS, Svelte, or Vue).
+    *   **Files:**
+        *   Modify: Frontend files within `crates/pressr-gui/src/`.
+
+14. **[ ] Tauri Backend Commands:**
+    *   **Task:** Define Tauri commands in the Rust backend (`src-tauri/src/main.rs`) to handle interactions from the frontend, specifically to trigger a load test using `pressr-core`.
+    *   **Tool:** Tauri API (`#[tauri::command]`), Rust.
+    *   **Files:**
+        *   Modify: `crates/pressr-gui/src-tauri/src/main.rs`.
+        *   Modify: `crates/pressr-gui/src-tauri/Cargo.toml` (add `pressr-core` as a dependency).
+
+15. **[ ] Frontend-Backend Communication:**
+    *   **Task:** Implement JavaScript code in the frontend to gather input values and invoke the Tauri backend command to start the load test.
+    *   **Tool:** Tauri JavaScript API (`invoke`).
+    *   **Files:**
+        *   Modify: Frontend JavaScript files within `crates/pressr-gui/src/`.
+
+16. **[ ] Display Test Progress & Results:**
+    *   **Task:** Show progress indication while the test is running. Display the summary results (`LoadTestResults`) in the UI after the test completes. Handle potential errors during the test run.
+    *   **Tool:** Tauri Events or Commands for progress updates, frontend UI updates (JS/DOM manipulation).
+    *   **Files:**
+        *   Modify: `crates/pressr-gui/src-tauri/src/main.rs` (potentially emit events or return results).
+        *   Modify: Frontend files within `crates/pressr-gui/src/`.
+
+17. **[ ] Report Handling:**
+    *   **Task:** Decide how to handle report generation. Options:
+        *   A) Trigger report generation via backend command, save to disk, and provide a link/button to open the file.
+        *   B) Display results directly in the Tauri UI, perhaps mimicking parts of the HTML report format.
+    *   **Tool:** Tauri API (commands, events, filesystem access), frontend UI elements.
+    *   **Files:**
+        *   Modify: `crates/pressr-gui/src-tauri/src/main.rs`.
+        *   Modify: Frontend files within `crates/pressr-gui/src/`.
+
+18. **[ ] Packaging & Distribution:**
+    *   **Task:** Configure `tauri.conf.json` and use Tauri CLI to build distributable application bundles.
+    *   **Tool:** `cargo tauri build`.
+    *   **Files:**
+        *   Modify: `crates/pressr-gui/tauri.conf.json`. 
