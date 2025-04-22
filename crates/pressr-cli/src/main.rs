@@ -341,7 +341,7 @@ async fn main() -> std::result::Result<(), AppError> {
                 println!("{}", body);
             } else {
                 println!("Response body: (truncated, {} bytes total)", body.len());
-                println!("{}", &body[..1000]);
+                println!("{}", &body[..100]);
                 println!("... [truncated]");
             }
             
@@ -382,9 +382,21 @@ async fn main() -> std::result::Result<(), AppError> {
             let report = pressr_core::generate_report(&results, &report_options)
                 .map_err(AppError::Core)?;
             
-            // Print the report to stdout if no output file was specified
+            // Only print the report to stdout if no output file was specified AND the format is not HTML or SVG
             if args.output_file.is_none() {
-                println!("\n{}", report);
+                match args.output {
+                    OutputFormat::Text | OutputFormat::Json => {
+                        println!("\n{}", report);
+                    }
+                    OutputFormat::Html | OutputFormat::Svg => {
+                        // For HTML and SVG, just print a message
+                        let output_dir = args.output_dir.as_deref().unwrap_or("reports");
+                        println!("\nHTML report generated and saved to {} directory.", output_dir);
+                    }
+                    OutputFormat::All => {
+                        // This should be handled by the report formats section below
+                    }
+                }
             } else {
                 let output_dir = args.output_dir.as_deref().unwrap_or("reports");
                 let output_path = if args.output_file.as_ref().unwrap().contains('/') || args.output_file.as_ref().unwrap().contains('\\') {

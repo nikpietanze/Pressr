@@ -117,7 +117,12 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         .map_err(|e| Error::Io(e))?;
     info!("Report written to {}", output_path);
     
-    Ok(report)
+    // For HTML and SVG reports, return an empty string to avoid cluttering the console
+    if options.format == ReportFormat::Html || options.format == ReportFormat::Svg {
+        Ok(String::new())
+    } else {
+        Ok(report)
+    }
 }
 
 /// Get output file path based on options
@@ -492,93 +497,84 @@ fn generate_html_report(preprocessed: &PreprocessedData, options: &ReportOptions
         html.replace("<!-- HISTOGRAM_PLACEHOLDER -->", "")
     };
     
-    // Add detailed request information if requested
-    let html = if options.include_details {
-        let mut details_html = String::from("<h3>Request Details</h3>");
-        
-        // Add filter controls
-        details_html.push_str(r#"
-        <div class="filter-controls">
-            <div class="filter-group">
-                <label for="status-filter">Status Code:</label>
-                <select id="status-filter">
-                    <option value="all">All</option>
-                    <option value="200">200 (Success)</option>
-                    <option value="404">404 (Not Found)</option>
-                    <option value="500">500 (Server Error)</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label for="result-filter">Result:</label>
-                <select id="result-filter">
-                    <option value="all">All</option>
-                    <option value="success">Success</option>
-                    <option value="error">Error</option>
-                </select>
-            </div>
-            <button id="reset-filters" class="filter-button">Reset</button>
-        </div>
-        "#);
-        
-        // Add table with ID for JavaScript manipulation
-        details_html.push_str(r#"<div class="table-container"><table class="details-table" id="request-details-table">"#);
-        details_html.push_str("<thead><tr><th>#</th><th>Status</th><th>Time (ms)</th><th>Size (bytes)</th><th>Result</th></tr></thead><tbody>");
-        
-        for (i, result) in preprocessed.results.requests.iter().enumerate() {
-            let status = result.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
-            let size = result.response_size.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
-            let result_text = if result.success {
-                "Success".to_string()
-            } else {
-                let error_text = result.error
-                    .as_deref()
-                    .unwrap_or("Unknown")
-                    .replace("HTTP Error: ", "");
-                
-                format!("Error: {}", error_text)
-            };
-            
-            details_html.push_str(&format!(
-                r#"<tr data-status="{}" data-result="{}"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class="{}">{}</td></tr>"#,
-                status,
-                if result.success { "success" } else { "error" },
-                i + 1,
-                status,
-                result.response_time,
-                size,
-                if result.success { "success" } else { "error" },
-                result_text
-            ));
-            
-            // If we have errors, ensure they're also included in the chart data
-            if !result.success && result.error.is_some() {
-                // Errors are already added to the LoadTestResults struct when it's created
-                // in LoadTestResults::new() in result.rs, so we don't need to do anything extra here
-            }
-        }
-        
-        details_html.push_str("</tbody></table></div>");
-        
-        // Add pagination controls
-        details_html.push_str(r#"
-        <div class="pagination-controls">
-            <button id="prev-page" class="pagination-button">&laquo; Previous</button>
-            <span id="page-info">Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
-            <button id="next-page" class="pagination-button">Next &raquo;</button>
-            <select id="page-size">
-                <option value="10">10 per page</option>
-                <option value="20" selected>20 per page</option>
-                <option value="50">50 per page</option>
-                <option value="100">100 per page</option>
+    // Always add detailed request information for HTML reports
+    let mut details_html = String::from("<h3>Request Details</h3>");
+    
+    // Add filter controls
+    details_html.push_str(r#"
+    <div class="filter-controls">
+        <div class="filter-group">
+            <label for="status-filter">Status Code:</label>
+            <select id="status-filter">
+                <option value="all">All</option>
+                <option value="200">200 (Success)</option>
+                <option value="404">404 (Not Found)</option>
+                <option value="500">500 (Server Error)</option>
             </select>
         </div>
-        "#);
-        
-        html.replace("<!-- DETAILS_PLACEHOLDER -->", &details_html)
-    } else {
-        html.replace("<!-- DETAILS_PLACEHOLDER -->", "")
-    };
+        <div class="filter-group">
+            <label for="result-filter">Result:</label>
+            <select id="result-filter">
+                <option value="all">All</option>
+                <option value="success">Success</option>
+                <option value="error">Error</option>
+            </select>
+        </div>
+        <button id="reset-filters" class="filter-button">Reset</button>
+    </div>
+    "#);
     
+    // Add table with ID for JavaScript manipulation
+    details_html.push_str(r#"<div class="table-container"><table class="details-table" id="request-details-table">"#);
+    details_html.push_str("<thead><tr><th>#</th><th>Status</th><th>Time (ms)</th><th>Size (bytes)</th><th>Result</th></tr></thead><tbody>");
+    
+    for (i, result) in preprocessed.results.requests.iter().enumerate() {
+        let status = result.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
+        let size = result.response_size.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
+        let result_text = if result.success {
+            "Success".to_string()
+        } else {
+            let error_text = result.error
+                .as_deref()
+                .unwrap_or("Unknown")
+                .replace("HTTP Error: ", "");
+            
+            format!("Error: {}", error_text)
+        };
+        
+        details_html.push_str(&format!(
+            r#"<tr data-status="{}" data-result="{}"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class="{}">{}</td></tr>"#,
+            status,
+            if result.success { "success" } else { "error" },
+            i + 1,
+            status,
+            result.response_time,
+            size,
+            if result.success { "success" } else { "error" },
+            result_text
+        ));
+    }
+    
+    details_html.push_str("</tbody></table></div>");
+    
+    // Add pagination controls
+    details_html.push_str(r#"
+    <div class="pagination-controls">
+        <button id="prev-page" class="pagination-button">&laquo; Previous</button>
+        <span id="page-info">Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+        <button id="next-page" class="pagination-button">Next &raquo;</button>
+        <select id="page-size">
+            <option value="10">10 per page</option>
+            <option value="20" selected>20 per page</option>
+            <option value="50">50 per page</option>
+            <option value="100">100 per page</option>
+        </select>
+    </div>
+    "#);
+    
+    let html = html.replace("<!-- DETAILS_PLACEHOLDER -->", &details_html);
+    
+    // Return the HTML content for file writing
     Ok(html)
 }
 
