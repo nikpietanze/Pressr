@@ -121,6 +121,26 @@ pub fn generate_report(results: &LoadTestResults, options: &ReportOptions) -> Re
         }
     }
     
+    // For HTML reports, copy the logo file to the reports directory
+    if options.format == ReportFormat::Html {
+        // Get the path to the logo file
+        let logo_src_path = "assets/images/pressr-logo.png";
+        let logo_dest_path = format!("{}/pressr-logo.png", output_dir);
+        
+        // Only copy if the source exists
+        if std::path::Path::new(logo_src_path).exists() {
+            debug!("Copying logo file to reports directory");
+            if let Err(e) = fs::copy(logo_src_path, &logo_dest_path) {
+                warn!("Failed to copy logo file: {}", e);
+                // Don't fail the report generation if logo copy fails
+            } else {
+                debug!("Logo file copied to {}", logo_dest_path);
+            }
+        } else {
+            warn!("Logo file not found at {}", logo_src_path);
+        }
+    }
+    
     debug!("Writing report to: {}", output_path);
     let mut file = File::create(&output_path)
         .map_err(|e| Error::Io(e))?;

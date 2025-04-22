@@ -26,7 +26,7 @@
             background-color: var(--bg-color);
             color: var(--text-color);
             margin: 0;
-            padding: 20px;
+            padding: 0;
             line-height: 1.6;
         }
         
@@ -36,11 +36,48 @@
             padding: 20px;
         }
         
+        /* Navigation bar styles */
+        .navbar {
+            background-color: var(--card-bg);
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+            width: 100%;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo img {
+            height: 40px;
+            width: auto;
+            margin-right: 12px;
+            object-fit: contain;
+        }
+        
+        .logo-text {
+            color: var(--text-dark);
+            font-weight: 600;
+            font-size: 1.5rem;
+        }
+        
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin: 30px 0;
             padding-bottom: 15px;
             border-bottom: 1px solid var(--border-color);
         }
@@ -338,10 +375,17 @@
     </style>
 </head>
 <body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">
+                <img src="pressr-logo.png" alt="Pressr Logo">
+            </div>
+        </div>
+    </nav>
     <div class="container">
         <header>
             <div>
-                <h1>Pressr Load Test Report</h1>
+                <h1>Load Test Report</h1>
                 <div class="metadata"><!-- METADATA_PLACEHOLDER --></div>
             </div>
             <div class="status-badge success">Test Completed</div>
