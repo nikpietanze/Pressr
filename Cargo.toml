@@ -2,6 +2,7 @@
 members = [
     "crates/pressr-cli",
     "crates/pressr-core",
+    "crates/pressr-gui/src-tauri",
 ]
 resolver = "2"
 

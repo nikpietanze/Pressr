@@ -25,3 +25,12 @@
 
 # Output reports
 reports/*
+
+# Build outputs
+/target/release/bundle/
+*.AppImage
+*.dmg
+*.deb
+*.rpm
+*.msi
+*.exe
